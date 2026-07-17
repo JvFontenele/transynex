@@ -2,18 +2,10 @@
 import { computed } from 'vue';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { api } from '../api';
+import { PROVIDER_TYPE_LABELS } from '../lib/labels';
 
 const queryClient = useQueryClient();
 const providers = useQuery({ queryKey: ['providers'], queryFn: api.listProviders });
-
-const typeLabels: Record<string, string> = {
-  ocr: 'OCR',
-  translation: 'Tradução',
-  inpainting: 'Inpainting',
-  render: 'Renderização',
-  export: 'Exportação',
-  storage: 'Armazenamento',
-};
 
 // Só tipos com pelo menos um provider instalado
 const types = computed(() =>
@@ -48,7 +40,9 @@ function onChange(e: Event) {
         :key="type"
         class="flex items-center gap-4 rounded-lg border border-slate-800 bg-slate-900/60 p-4"
       >
-        <span class="w-36 shrink-0 text-sm text-slate-400">{{ typeLabels[type] ?? type }}</span>
+        <span class="w-36 shrink-0 text-sm text-slate-400">
+          {{ PROVIDER_TYPE_LABELS[type] ?? type }}
+        </span>
         <select
           :value="currentDefault(list)"
           :disabled="setDefault.isPending.value"

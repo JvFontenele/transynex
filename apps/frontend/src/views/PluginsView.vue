@@ -2,6 +2,7 @@
 import { reactive, ref } from 'vue';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { api, type ConfigField, type ProviderInfo } from '../api';
+import { PROVIDER_TYPE_LABELS } from '../lib/labels';
 
 const queryClient = useQueryClient();
 const providers = useQuery({ queryKey: ['providers'], queryFn: api.listProviders });
@@ -10,15 +11,6 @@ const health = useQuery({
   queryFn: api.providersHealth,
   refetchInterval: 15000,
 });
-
-const typeLabels: Record<string, string> = {
-  ocr: 'OCR',
-  translation: 'Tradução',
-  inpainting: 'Inpainting',
-  render: 'Renderização',
-  export: 'Exportação',
-  storage: 'Armazenamento',
-};
 
 // Form aberto por provider: valores editados a partir do configSchema
 const open = ref<string | null>(null);
@@ -57,12 +49,15 @@ const setDefault = useMutation({
 
 <template>
   <div>
-    <h2 class="mb-6 text-2xl font-semibold">Plugins</h2>
+    <h2 class="mb-1 text-2xl font-semibold">Plugins</h2>
+    <p class="mb-6 text-sm text-slate-500">
+      Providers instalados por etapa do pipeline. Configure URLs, modelos e chaves de cada um aqui.
+    </p>
 
     <div v-for="(list, type) in providers.data.value" :key="type" class="mb-8">
       <template v-if="list.length">
         <h3 class="mb-3 text-sm font-medium uppercase tracking-wide text-slate-500">
-          {{ typeLabels[type] ?? type }}
+          {{ PROVIDER_TYPE_LABELS[type] ?? type }}
         </h3>
         <div class="space-y-3">
           <div

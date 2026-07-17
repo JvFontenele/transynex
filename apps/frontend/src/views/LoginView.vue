@@ -27,38 +27,45 @@ async function submit() {
 </script>
 
 <template>
-  <div class="flex min-h-[60vh] items-center justify-center">
-    <form
-      class="w-full max-w-sm rounded-lg border border-slate-800 bg-slate-900/60 p-6"
-      @submit.prevent="submit"
-    >
-      <h2 class="mb-1 text-xl font-semibold">Entrar</h2>
-      <p class="mb-5 text-sm text-slate-500">Acesse o Transynex</p>
+  <div class="flex min-h-screen items-center justify-center">
+    <div class="w-full max-w-sm">
+      <div class="mb-6 text-center">
+        <h1 class="text-3xl font-bold tracking-tight">
+          Trans<span class="text-sky-400">ynex</span>
+        </h1>
+        <p class="mt-1 text-sm text-slate-500">The Open Translation Orchestrator</p>
+      </div>
 
-      <label class="mb-1 block text-xs text-slate-500">E-mail</label>
-      <input
-        v-model="email"
-        type="email"
-        required
-        autocomplete="username"
-        class="mb-3 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-      />
-      <label class="mb-1 block text-xs text-slate-500">Senha</label>
-      <input
-        v-model="password"
-        type="password"
-        required
-        autocomplete="current-password"
-        class="mb-4 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-      />
-
-      <button
-        :disabled="pending"
-        class="w-full rounded-md bg-sky-600 px-4 py-2 text-sm font-medium hover:bg-sky-500 disabled:opacity-50"
+      <form
+        class="rounded-lg border border-slate-800 bg-slate-900/60 p-6"
+        @submit.prevent="submit"
       >
-        {{ pending ? 'Entrando…' : 'Entrar' }}
-      </button>
-      <p v-if="error" class="mt-3 text-sm text-rose-400">{{ error }}</p>
-    </form>
+        <label class="mb-1 block text-xs text-slate-500">E-mail</label>
+        <input
+          v-model="email"
+          type="email"
+          required
+          autofocus
+          autocomplete="username"
+          class="mb-3 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm outline-none focus:border-sky-500"
+        />
+        <label class="mb-1 block text-xs text-slate-500">Senha</label>
+        <input
+          v-model="password"
+          type="password"
+          required
+          autocomplete="current-password"
+          class="mb-4 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm outline-none focus:border-sky-500"
+        />
+
+        <button
+          :disabled="pending"
+          class="w-full rounded-md bg-sky-600 px-4 py-2 text-sm font-medium hover:bg-sky-500 disabled:opacity-50"
+        >
+          {{ pending ? 'Entrando…' : 'Entrar' }}
+        </button>
+        <p v-if="error" class="mt-3 text-sm text-rose-400">{{ error }}</p>
+      </form>
+    </div>
   </div>
 </template>
