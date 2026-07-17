@@ -20,6 +20,12 @@
       "path": "plugins/translation-libretranslate"
     },
     {
+      "path": "plugins/render-canvas"
+    },
+    {
+      "path": "plugins/export-basic"
+    },
+    {
       "path": "apps/cli"
     },
     {

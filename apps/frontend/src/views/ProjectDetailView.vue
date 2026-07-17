@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
-import { api } from '../api';
+import { api, downloadUrl, fileUrl } from '../api';
 import { useJobsStore } from '../stores/jobs';
 
 const route = useRoute();
@@ -40,20 +40,47 @@ const run = useMutation({
   onSuccess: (data) => (runningJobIds.value = data.jobIds),
 });
 
-// Recarrega as páginas quando um job do run atual termina.
+// Recarrega as páginas quando qualquer job termina (run, extração de
+// PDF/CBZ…). O snapshot vem sempre do banco; o evento só dispara o refetch.
+let seenCompleted = 0;
 jobsStore.$subscribe(() => {
+  const completed = Object.values(jobsStore.live).filter(
+    (j) => j.status === 'completed' || j.status === 'failed',
+  ).length;
+  if (completed > seenCompleted) {
+    seenCompleted = completed;
+    queryClient.invalidateQueries({ queryKey: ['pages', projectId] });
+    queryClient.invalidateQueries({ queryKey: ['project', projectId] });
+  }
   const done = runningJobIds.value.filter(
     (id) => jobsStore.live[id]?.status === 'completed' || jobsStore.live[id]?.status === 'failed',
   );
   if (done.length > 0 && done.length === runningJobIds.value.length) {
     runningJobIds.value = [];
-    queryClient.invalidateQueries({ queryKey: ['pages', projectId] });
   }
 });
 
 const running = computed(() =>
   runningJobIds.value.map((id) => jobsStore.live[id]).filter(Boolean),
 );
+
+// Exportação
+const exportFormat = ref('pdf');
+const exports = useQuery({
+  queryKey: ['exports', projectId],
+  queryFn: () => api.listExports(projectId.value),
+});
+const exporting = ref<string | null>(null);
+const doExport = useMutation({
+  mutationFn: () => api.exportProject(projectId.value, exportFormat.value),
+  onSuccess: (data) => (exporting.value = data.jobId),
+});
+jobsStore.$subscribe(() => {
+  if (exporting.value && jobsStore.live[exporting.value]?.status === 'completed') {
+    exporting.value = null;
+    queryClient.invalidateQueries({ queryKey: ['exports', projectId] });
+  }
+});
 
 // Edição inline de tradução (etapa de correção)
 const editing = ref<string | null>(null);
@@ -123,13 +150,13 @@ const saveRegion = useMutation({
       <input
         ref="fileInput"
         type="file"
-        accept="image/png,image/jpeg,image/webp,image/tiff"
+        accept="image/png,image/jpeg,image/webp,image/tiff,application/pdf,.cbz,.zip"
         multiple
         class="hidden"
         @change="onFileChange"
       />
       <button class="text-sm text-sky-400 hover:underline" @click="fileInput?.click()">
-        Enviar imagens (PNG, JPEG, WEBP, TIFF)
+        Enviar arquivos (PNG, JPEG, WEBP, TIFF, PDF, CBZ, ZIP)
       </button>
       <p v-if="upload.isPending.value" class="mt-2 text-xs text-slate-500">Enviando…</p>
       <p v-if="upload.error.value" class="mt-2 text-xs text-rose-400">
@@ -137,8 +164,59 @@ const saveRegion = useMutation({
       </p>
     </div>
 
+    <div
+      class="mb-8 flex items-center gap-3 rounded-lg border border-slate-800 bg-slate-900/60 p-4"
+    >
+      <span class="text-sm text-slate-400">Exportar como</span>
+      <select
+        v-model="exportFormat"
+        class="rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm"
+      >
+        <option value="pdf">PDF</option>
+        <option value="cbz">CBZ</option>
+        <option value="zip">ZIP</option>
+        <option value="txt">TXT</option>
+        <option value="markdown">Markdown</option>
+      </select>
+      <button
+        :disabled="doExport.isPending.value || exporting !== null || !pages.data.value?.length"
+        class="rounded-md bg-slate-700 px-3 py-1.5 text-sm hover:bg-slate-600 disabled:opacity-50"
+        @click="doExport.mutate()"
+      >
+        {{ exporting ? 'Exportando…' : 'Exportar' }}
+      </button>
+      <div class="ml-auto flex gap-2">
+        <a
+          v-for="e in exports.data.value?.slice(0, 5)"
+          :key="e.id"
+          :href="downloadUrl(e.id)"
+          class="rounded-md border border-slate-700 px-2 py-1 text-xs text-sky-400 hover:border-sky-600"
+        >
+          ⬇ {{ e.format }} ({{ (e.sizeBytes / 1024).toFixed(0) }} KB)
+        </a>
+      </div>
+    </div>
+
     <div v-for="page in pages.data.value" :key="page.id" class="mb-6">
       <h3 class="mb-2 text-sm font-medium text-slate-400">Página {{ page.order + 1 }}</h3>
+      <div class="mb-3 flex gap-4">
+        <figure class="w-1/2">
+          <img
+            :src="fileUrl(page.sourceImageRef)"
+            class="w-full rounded-lg border border-slate-800"
+            loading="lazy"
+          />
+          <figcaption class="mt-1 text-center text-xs text-slate-600">Original</figcaption>
+        </figure>
+        <figure v-if="page.renderedImageRef" class="w-1/2">
+          <img
+            :src="fileUrl(page.renderedImageRef)"
+            class="w-full rounded-lg border border-slate-800"
+            loading="lazy"
+          />
+          <figcaption class="mt-1 text-center text-xs text-slate-600">Traduzida</figcaption>
+        </figure>
+      </div>
       <table v-if="page.ocrRegions.length" class="w-full text-sm">
         <thead>
           <tr class="border-b border-slate-800 text-left text-xs text-slate-500">

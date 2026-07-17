@@ -1,15 +1,23 @@
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { Queue } from 'bullmq';
+import type { ExportFormat } from '@transynex/core-contracts';
 import type { AppContext } from './context.js';
-import type { PipelineJobData } from './queue.js';
+import type { QueueJobData } from './queue.js';
 
 const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/tiff']);
+const EXTRACT_MIMES = new Set([
+  'application/pdf',
+  'application/zip',
+  'application/x-cbz',
+  'application/vnd.comicbook+zip',
+]);
+const EXPORT_FORMATS = new Set<string>(['pdf', 'cbz', 'zip', 'txt', 'markdown']);
 
 export function registerRoutes(
   app: FastifyInstance,
   ctx: AppContext,
-  queue: Queue<PipelineJobData>,
+  queue: Queue<QueueJobData>,
 ): void {
   // --- Projects ---------------------------------------------------------
 
@@ -49,8 +57,7 @@ export function registerRoutes(
   });
 
   // --- Uploads ----------------------------------------------------------
-  // MVP: aceita imagens; cada imagem vira um SourceFile já "extracted" com
-  // uma Page. Extração de PDF/CBZ entra como job 'extraction' na sequência.
+  // Imagens viram Page direto; PDF/CBZ/ZIP disparam um job 'extraction'.
 
   app.post<{ Params: { id: string } }>('/api/v1/projects/:id/uploads', async (req, reply) => {
     const project = await ctx.prisma.project.findUnique({ where: { id: req.params.id } });
@@ -58,8 +65,9 @@ export function registerRoutes(
 
     const file = await req.file();
     if (!file) return reply.code(400).send({ error: 'Nenhum arquivo enviado' });
-    if (!IMAGE_MIMES.has(file.mimetype)) {
-      return reply.code(415).send({ error: `Tipo não suportado nesta fase: ${file.mimetype}` });
+    const isImage = IMAGE_MIMES.has(file.mimetype);
+    if (!isImage && !EXTRACT_MIMES.has(file.mimetype)) {
+      return reply.code(415).send({ error: `Tipo não suportado: ${file.mimetype}` });
     }
 
     const buffer = await file.toBuffer();
@@ -74,25 +82,37 @@ export function registerRoutes(
       },
     });
 
-    const ext = path.extname(file.filename) || '.png';
+    const ext = path.extname(file.filename) || '';
     const fileRef = `projects/${project.id}/source/${sourceFile.id}${ext}`;
     await ctx.storage.save(fileRef, buffer);
+    await ctx.prisma.sourceFile.update({ where: { id: sourceFile.id }, data: { fileRef } });
 
-    const pageCount = await ctx.prisma.page.count({ where: { projectId: project.id } });
-    const page = await ctx.prisma.page.create({
-      data: {
-        projectId: project.id,
-        sourceFileId: sourceFile.id,
-        order: pageCount,
-        sourceImageRef: fileRef,
-      },
-    });
-    await ctx.prisma.sourceFile.update({
-      where: { id: sourceFile.id },
-      data: { fileRef, status: 'extracted' },
-    });
+    if (isImage) {
+      const pageCount = await ctx.prisma.page.count({ where: { projectId: project.id } });
+      const page = await ctx.prisma.page.create({
+        data: {
+          projectId: project.id,
+          sourceFileId: sourceFile.id,
+          order: pageCount,
+          sourceImageRef: fileRef,
+        },
+      });
+      await ctx.prisma.sourceFile.update({
+        where: { id: sourceFile.id },
+        data: { status: 'extracted' },
+      });
+      return reply.code(201).send({ sourceFileId: sourceFile.id, pageId: page.id });
+    }
 
-    return reply.code(201).send({ sourceFileId: sourceFile.id, pageId: page.id });
+    const job = await ctx.prisma.job.create({
+      data: { projectId: project.id, type: 'extraction', status: 'queued' },
+    });
+    await queue.add(
+      'extract',
+      { kind: 'extract', jobId: job.id, projectId: project.id, sourceFileId: sourceFile.id },
+      { attempts: 2 },
+    );
+    return reply.code(202).send({ sourceFileId: sourceFile.id, jobId: job.id });
   });
 
   // --- Pages e Regions (correção) ----------------------------------------
@@ -132,7 +152,9 @@ export function registerRoutes(
 
   app.post<{
     Params: { id: string };
-    Body: { ocrProviderId?: string; translationProviderId?: string } | undefined;
+    Body:
+      | { ocrProviderId?: string; translationProviderId?: string; renderProviderId?: string }
+      | undefined;
   }>('/api/v1/projects/:id/run', async (req, reply) => {
     const project = await ctx.prisma.project.findUnique({ where: { id: req.params.id } });
     if (!project) return reply.code(404).send({ error: 'Projeto não encontrado' });
@@ -151,6 +173,7 @@ export function registerRoutes(
       data: { status: 'PROCESSING' },
     });
 
+    const renderProviderId = req.body?.renderProviderId ?? 'canvas-render';
     const jobIds: string[] = [];
     for (const page of pages) {
       const job = await ctx.prisma.job.create({
@@ -159,6 +182,7 @@ export function registerRoutes(
       await queue.add(
         'page',
         {
+          kind: 'page',
           jobId: job.id,
           projectId: project.id,
           pageId: page.id,
@@ -166,6 +190,7 @@ export function registerRoutes(
           targetLanguage: project.targetLanguage,
           ocrProviderId,
           translationProviderId,
+          renderProviderId,
         },
         { attempts: 3, backoff: { type: 'exponential', delay: 2000 } },
       );
@@ -173,6 +198,68 @@ export function registerRoutes(
     }
 
     return reply.code(202).send({ jobIds });
+  });
+
+  // --- Exportação -----------------------------------------------------------
+
+  app.post<{ Params: { id: string }; Body: { format: string } }>(
+    '/api/v1/projects/:id/export',
+    async (req, reply) => {
+      const project = await ctx.prisma.project.findUnique({ where: { id: req.params.id } });
+      if (!project) return reply.code(404).send({ error: 'Projeto não encontrado' });
+      const { format } = req.body;
+      if (!EXPORT_FORMATS.has(format)) {
+        return reply.code(400).send({ error: `Formato inválido: ${format}` });
+      }
+      const job = await ctx.prisma.job.create({
+        data: { projectId: project.id, type: 'export', status: 'queued' },
+      });
+      await queue.add(
+        'export',
+        {
+          kind: 'export',
+          jobId: job.id,
+          projectId: project.id,
+          format: format as ExportFormat,
+          exportProviderId: 'basic-export',
+        },
+        { attempts: 2 },
+      );
+      return reply.code(202).send({ jobId: job.id });
+    },
+  );
+
+  app.get<{ Params: { id: string } }>('/api/v1/projects/:id/exports', async (req) =>
+    ctx.prisma.exportArtifact.findMany({
+      where: { projectId: req.params.id },
+      orderBy: { createdAt: 'desc' },
+    }),
+  );
+
+  app.get<{ Params: { id: string } }>('/api/v1/exports/:id/download', async (req, reply) => {
+    const artifact = await ctx.prisma.exportArtifact.findUnique({ where: { id: req.params.id } });
+    if (!artifact) return reply.code(404).send({ error: 'Exportação não encontrada' });
+    const stream = await ctx.storage.readStream(artifact.fileRef);
+    return reply
+      .header('content-disposition', `attachment; filename="${path.basename(artifact.fileRef)}"`)
+      .send(stream);
+  });
+
+  // --- Arquivos (preview de imagens) -----------------------------------------
+  // Sem auth nesta fase; quando o JWT entrar, vira o GET /files/:token
+  // assinado do ARCHITECTURE.md.
+
+  app.get<{ Querystring: { ref: string } }>('/api/v1/files', async (req, reply) => {
+    const { ref } = req.query;
+    if (!ref || !(await ctx.storage.exists(ref))) {
+      return reply.code(404).send({ error: 'Arquivo não encontrado' });
+    }
+    const ext = path.extname(ref).toLowerCase();
+    const mime =
+      { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' }[
+        ext
+      ] ?? 'application/octet-stream';
+    return reply.header('content-type', mime).send(await ctx.storage.readStream(ref));
   });
 
   // --- Jobs ----------------------------------------------------------------

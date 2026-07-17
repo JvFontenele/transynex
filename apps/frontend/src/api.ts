@@ -108,4 +108,28 @@ export const api = {
 
   listProviders: () => request<Record<string, ProviderMetadata[]>>('/providers'),
   providersHealth: () => request<Record<string, HealthCheckResult>>('/providers/health'),
+
+  exportProject: (projectId: string, format: string) =>
+    request<{ jobId: string }>(`/projects/${projectId}/export`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ format }),
+    }),
+  listExports: (projectId: string) =>
+    request<ExportArtifact[]>(`/projects/${projectId}/exports`),
 };
+
+export interface ExportArtifact {
+  id: string;
+  format: string;
+  sizeBytes: number;
+  createdAt: string;
+}
+
+export function fileUrl(ref: string): string {
+  return `${BASE}/files?ref=${encodeURIComponent(ref)}`;
+}
+
+export function downloadUrl(artifactId: string): string {
+  return `${BASE}/exports/${artifactId}/download`;
+}

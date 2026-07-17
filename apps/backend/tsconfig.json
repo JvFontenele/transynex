@@ -5,13 +5,33 @@
     "outDir": "dist",
     "resolveJsonModule": true
   },
-  "include": ["src"],
+  "include": [
+    "src"
+  ],
   "references": [
-    { "path": "../../packages/core-contracts" },
-    { "path": "../../packages/core" },
-    { "path": "../../plugins/storage-local" },
-    { "path": "../../plugins/ocr-tesseract" },
-    { "path": "../../plugins/translation-ollama" },
-    { "path": "../../plugins/translation-libretranslate" }
+    {
+      "path": "../../packages/core-contracts"
+    },
+    {
+      "path": "../../packages/core"
+    },
+    {
+      "path": "../../plugins/storage-local"
+    },
+    {
+      "path": "../../plugins/ocr-tesseract"
+    },
+    {
+      "path": "../../plugins/translation-ollama"
+    },
+    {
+      "path": "../../plugins/translation-libretranslate"
+    },
+    {
+      "path": "../../plugins/render-canvas"
+    },
+    {
+      "path": "../../plugins/export-basic"
+    }
   ]
 }

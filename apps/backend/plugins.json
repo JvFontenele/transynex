@@ -3,7 +3,9 @@
     "@transynex/storage-local",
     "@transynex/ocr-tesseract",
     "@transynex/translation-ollama",
-    "@transynex/translation-libretranslate"
+    "@transynex/translation-libretranslate",
+    "@transynex/render-canvas",
+    "@transynex/export-basic"
   ],
   "defaultStorage": "storage-local"
 }

@@ -11,15 +11,19 @@
     "@prisma/client": "^6.10.0",
     "@transynex/core": "workspace:*",
     "@transynex/core-contracts": "workspace:*",
+    "@transynex/export-basic": "workspace:*",
     "@transynex/ocr-tesseract": "workspace:*",
+    "@transynex/render-canvas": "workspace:*",
     "@transynex/storage-local": "workspace:*",
     "@transynex/translation-libretranslate": "workspace:*",
     "@transynex/translation-ollama": "workspace:*",
+    "adm-zip": "^0.5.16",
     "bullmq": "^5.34.0",
     "fastify": "^5.2.0",
     "socket.io": "^4.8.0"
   },
   "devDependencies": {
-    "prisma": "^6.10.0"
+    "prisma": "^6.10.0",
+    "@types/adm-zip": "^0.5.7"
   }
 }
