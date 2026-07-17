@@ -157,6 +157,12 @@ export const api = {
   },
 
   listPages: (projectId: string) => request<Page[]>(`/projects/${projectId}/pages`),
+  reorderPages: (projectId: string, pageIds: string[]) =>
+    request<Page[]>(`/projects/${projectId}/pages/reorder`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pageIds }),
+    }),
   getPage: (pageId: string) => request<Page>(`/pages/${pageId}`),
   renderPage: (pageId: string) => request<Page>(`/pages/${pageId}/render`, { method: 'POST' }),
 

@@ -163,6 +163,40 @@ export function registerRoutes(
     return pages.map(withImageUrls);
   });
 
+  // Reordenação: recebe a lista completa de ids na nova ordem.
+  app.post<{ Params: { id: string }; Body: { pageIds: string[] } }>(
+    '/api/v1/projects/:id/pages/reorder',
+    async (req, reply) => {
+      const pageIds = req.body?.pageIds;
+      if (!Array.isArray(pageIds) || pageIds.some((id) => typeof id !== 'string')) {
+        return reply.code(400).send({ error: 'pageIds inválido: esperado array de ids' });
+      }
+      const pages = await ctx.prisma.page.findMany({
+        where: { projectId: req.params.id },
+        select: { id: true },
+      });
+      const existing = new Set(pages.map((p) => p.id));
+      if (
+        pageIds.length !== existing.size ||
+        new Set(pageIds).size !== pageIds.length ||
+        pageIds.some((id) => !existing.has(id))
+      ) {
+        return reply
+          .code(400)
+          .send({ error: 'pageIds deve conter exatamente todas as páginas do projeto' });
+      }
+      await ctx.prisma.$transaction(
+        pageIds.map((id, order) => ctx.prisma.page.update({ where: { id }, data: { order } })),
+      );
+      const updated = await ctx.prisma.page.findMany({
+        where: { projectId: req.params.id },
+        orderBy: { order: 'asc' },
+        include: { ocrRegions: { orderBy: { readingOrder: 'asc' } } },
+      });
+      return updated.map(withImageUrls);
+    },
+  );
+
   app.get<{ Params: { id: string } }>('/api/v1/pages/:id', async (req, reply) => {
     const page = await ctx.prisma.page.findUnique({
       where: { id: req.params.id },

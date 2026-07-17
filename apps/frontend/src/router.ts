@@ -18,6 +18,13 @@ export const router = createRouter({
       component: () => import('./views/ProjectDetailView.vue'),
     },
     {
+      // Modo leitura imersivo (sem sidebar): páginas traduzidas empilhadas
+      path: '/projects/:id/read',
+      name: 'reader',
+      component: () => import('./views/ReaderView.vue'),
+      meta: { immersive: true },
+    },
+    {
       path: '/projects/:id/pages/:pageId',
       name: 'page-editor',
       component: () => import('./views/PageEditorView.vue'),
