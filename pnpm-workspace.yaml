@@ -3,5 +3,9 @@ packages:
   - plugins/*
   - apps/*
 allowBuilds:
+  '@prisma/client': true
+  '@prisma/engines': true
   esbuild: true
+  msgpackr-extract: true
+  prisma: true
   tesseract.js: true

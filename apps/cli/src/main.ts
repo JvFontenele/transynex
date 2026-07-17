@@ -7,7 +7,7 @@ import {
   type OCRProvider,
   type TranslationProvider,
 } from '@transynex/core-contracts';
-import { loadPlugins } from './plugin-loader.js';
+import { loadPlugins } from '@transynex/core';
 
 const HELP = `Transynex — CLI (pipeline mínimo offline)
 

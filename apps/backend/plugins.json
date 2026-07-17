@@ -1,0 +1,9 @@
+{
+  "plugins": [
+    "@transynex/storage-local",
+    "@transynex/ocr-tesseract",
+    "@transynex/translation-ollama",
+    "@transynex/translation-libretranslate"
+  ],
+  "defaultStorage": "storage-local"
+}

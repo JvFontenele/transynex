@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "dependencies": {
+    "@transynex/core": "workspace:*",
     "@transynex/core-contracts": "workspace:*",
     "@transynex/ocr-tesseract": "workspace:*",
     "@transynex/storage-local": "workspace:*",

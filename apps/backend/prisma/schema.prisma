@@ -1,0 +1,142 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  role         String   @default("admin")
+  createdAt    DateTime @default(now())
+
+  projects Project[]
+}
+
+enum ProjectStatus {
+  DRAFT
+  PROCESSING
+  READY
+  ERROR
+}
+
+model Project {
+  id             String        @id @default(cuid())
+  ownerId        String?
+  owner          User?         @relation(fields: [ownerId], references: [id])
+  name           String
+  sourceLanguage String
+  targetLanguage String
+  status         ProjectStatus @default(DRAFT)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  sourceFiles SourceFile[]
+  pages       Page[]
+  pipelines   Pipeline[]
+  jobs        Job[]
+  exports     ExportArtifact[]
+}
+
+model SourceFile {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  fileName  String
+  mimeType  String
+  fileRef   String
+  sizeBytes Int
+  status    String   @default("pending") // pending | extracting | extracted | error
+  createdAt DateTime @default(now())
+
+  pages Page[]
+}
+
+model Page {
+  id                String     @id @default(cuid())
+  projectId         String
+  project           Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sourceFileId      String
+  sourceFile        SourceFile @relation(fields: [sourceFileId], references: [id], onDelete: Cascade)
+  order             Int
+  sourceImageRef    String
+  inpaintedImageRef String?
+  renderedImageRef  String? // null = página "suja", precisa re-render
+
+  ocrRegions OcrRegion[]
+
+  @@index([projectId, order])
+}
+
+model OcrRegion {
+  id             String  @id @default(cuid())
+  pageId         String
+  page           Page    @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  boundingBox    Json
+  sourceText     String
+  translatedText String?
+  confidence     Float
+  readingOrder   Int?
+  orientation    String?
+
+  @@index([pageId])
+}
+
+model Pipeline {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name      String
+  steps     Json // PipelineStep[]
+  createdAt DateTime @default(now())
+}
+
+model Job {
+  id                String    @id @default(cuid())
+  projectId         String
+  project           Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  pageId            String?
+  pipelineStepIndex Int?
+  type              String // JobType
+  status            String // JobStatus
+  progress          Int       @default(0)
+  attempts          Int       @default(0)
+  maxAttempts       Int       @default(3)
+  error             String?
+  startedAt         DateTime?
+  finishedAt        DateTime?
+  createdAt         DateTime  @default(now())
+
+  @@index([projectId, status])
+}
+
+model ProviderConfig {
+  id         String   @id @default(cuid())
+  providerId String   @unique
+  type       String
+  config     Json
+  isDefault  Boolean  @default(false)
+  updatedAt  DateTime @updatedAt
+}
+
+model ApiCredential {
+  id         String   @id @default(cuid())
+  providerId String   @unique
+  encrypted  Bytes
+  iv         Bytes
+  updatedAt  DateTime @updatedAt
+}
+
+model ExportArtifact {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  format    String
+  fileRef   String
+  sizeBytes Int
+  createdAt DateTime @default(now())
+}

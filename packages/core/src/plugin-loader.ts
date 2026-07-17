@@ -1,4 +1,7 @@
 import fs from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type {
   PluginManifest,
   Provider,
@@ -22,9 +25,15 @@ export async function loadPlugins(
 ): Promise<StorageProvider> {
   const config: PluginsConfig = JSON.parse(await fs.readFile(configPath, 'utf8'));
 
+  // Resolve os pacotes a partir do diretório do plugins.json (a aplicação
+  // que declara os plugins como dependência), não deste pacote — em
+  // node_modules estritos (pnpm) o core não enxerga os plugins.
+  const requireFromApp = createRequire(path.resolve(path.dirname(configPath), 'package.json'));
+
   const manifests: PluginManifest[] = [];
   for (const pkg of config.plugins) {
-    const mod = (await import(pkg)) as { manifest?: PluginManifest };
+    const entry = pathToFileURL(requireFromApp.resolve(pkg)).href;
+    const mod = (await import(entry)) as { manifest?: PluginManifest };
     if (!mod.manifest) throw new Error(`Pacote "${pkg}" não exporta um PluginManifest`);
     manifests.push(mod.manifest);
   }
