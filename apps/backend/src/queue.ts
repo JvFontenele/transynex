@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { Queue, Worker, type Job as BullJob } from 'bullmq';
 import type { Server as SocketServer } from 'socket.io';
 import type {
@@ -14,6 +15,23 @@ import { extractPages } from './extraction.js';
 
 const QUEUE_NAME = 'transynex';
 
+interface Box {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+// Considera que uma detecção do OCR "pertence" a uma região manual quando
+// mais de 30% da área dela cai dentro da caixa manual — nesse caso a
+// detecção é descartada para não duplicar o texto sob a marcação do usuário.
+function overlapsBox(a: Box, b: Box): boolean {
+  const ix = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
+  const iy = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
+  const area = a.width * a.height;
+  return area > 0 && ix * iy > 0.3 * area;
+}
+
 export interface PageJobData {
   kind: 'page';
   jobId: string;
@@ -24,6 +42,8 @@ export interface PageJobData {
   ocrProviderId: string;
   translationProviderId: string;
   renderProviderId: string;
+  /** Preserva regiões manuais/editadas pelo usuário (default true). */
+  preserveManual?: boolean;
 }
 
 export interface ExtractJobData {
@@ -104,54 +124,87 @@ export function createWorker(ctx: AppContext, io: SocketServer): Worker<QueueJob
     );
     const renderer = ctx.registry.get<RenderProvider>('render', data.renderProviderId);
 
+    // Regiões manuais/editadas são preservadas por padrão; só o "resto"
+    // (detecções automáticas) é apagado e refeito.
+    const preserve = data.preserveManual ?? true;
+    const manualRegions = preserve
+      ? await ctx.prisma.ocrRegion.findMany({ where: { pageId, manual: true } })
+      : [];
+    await ctx.prisma.ocrRegion.deleteMany({
+      where: preserve ? { pageId, manual: false } : { pageId },
+    });
+
     // Etapa 1: OCR (→40%)
     const ocrResult = await ocr.recognize({
       pageId,
       imageRef: page.sourceImageRef,
       languageHint: [sourceLanguage],
     });
-    await ctx.prisma.ocrRegion.deleteMany({ where: { pageId } });
+    // Descarta detecções que caem sob uma marcação manual (evita duplicar
+    // texto) e gera ids novos (os ids do provider podem colidir com regiões
+    // preservadas de runs anteriores).
+    const baseOrder = manualRegions.reduce((m, r) => Math.max(m, (r.readingOrder ?? -1) + 1), 0);
+    const newRegions = ocrResult.regions
+      .filter(
+        (r) =>
+          !manualRegions.some((m) => overlapsBox(r.boundingBox, m.boundingBox as unknown as Box)),
+      )
+      .map((r: OCRRegion) => ({ ...r, id: randomUUID() }));
     await ctx.prisma.ocrRegion.createMany({
-      data: ocrResult.regions.map((r: OCRRegion) => ({
+      data: newRegions.map((r) => ({
         id: r.id,
         pageId,
         boundingBox: r.boundingBox as object,
         sourceText: r.text,
         confidence: r.confidence,
-        readingOrder: r.readingOrder,
+        readingOrder: baseOrder + (r.readingOrder ?? 0),
         orientation: r.orientation,
       })),
     });
     await setProgress(jobId, 40);
 
-    // Etapa 2: tradução em lote (→80%)
-    let translations: string[] = [];
-    if (ocrResult.regions.length > 0) {
+    // Etapa 2: tradução em lote (→80%). Traduz as detecções novas e também
+    // regiões manuais que ainda não têm tradução (marcadas mas não traduzidas).
+    const manualToTranslate = manualRegions.filter(
+      (m) => !m.translatedText && m.sourceText.trim().length > 0,
+    );
+    const toTranslate = [
+      ...newRegions.map((r) => ({ id: r.id, text: r.text })),
+      ...manualToTranslate.map((m) => ({ id: m.id, text: m.sourceText })),
+    ];
+    if (toTranslate.length > 0) {
       const results = await translator.translateBatch(
-        ocrResult.regions.map((r) => ({ text: r.text, sourceLanguage, targetLanguage })),
+        toTranslate.map((r) => ({ text: r.text, sourceLanguage, targetLanguage })),
       );
-      translations = results.map((t) => t.translatedText);
       await ctx.prisma.$transaction(
-        ocrResult.regions.map((r, i) =>
+        toTranslate.map((r, i) =>
           ctx.prisma.ocrRegion.update({
             where: { id: r.id },
-            data: { translatedText: translations[i] },
+            data: { translatedText: results[i]?.translatedText },
           }),
         ),
       );
     }
     await setProgress(jobId, 80);
 
-    // Etapa 3: renderização (→100%)
-    if (ocrResult.regions.length > 0) {
+    // Etapa 3: renderização (→100%) com todas as regiões da página
+    // (preservadas + novas), já com as traduções aplicadas.
+    const allRegions = await ctx.prisma.ocrRegion.findMany({
+      where: { pageId },
+      orderBy: { readingOrder: 'asc' },
+    });
+    const textBlocks = allRegions
+      .map((r) => ({
+        regionId: r.id,
+        boundingBox: r.boundingBox as unknown as Box,
+        text: (r.translatedText ?? r.sourceText).trim(),
+      }))
+      .filter((b) => b.text.length > 0);
+    if (textBlocks.length > 0) {
       const rendered = await renderer.render({
         pageId,
         baseImageRef: page.inpaintedImageRef ?? page.sourceImageRef,
-        textBlocks: ocrResult.regions.map((r, i) => ({
-          regionId: r.id,
-          boundingBox: r.boundingBox,
-          text: translations[i] ?? r.text,
-        })),
+        textBlocks,
       });
       await ctx.prisma.page.update({
         where: { id: pageId },
@@ -159,7 +212,7 @@ export function createWorker(ctx: AppContext, io: SocketServer): Worker<QueueJob
       });
     }
 
-    await complete(jobId, data.projectId, { pageId, regions: ocrResult.regions.length });
+    await complete(jobId, data.projectId, { pageId, regions: allRegions.length });
   };
 
   const processExtract = async (data: ExtractJobData) => {
@@ -241,17 +294,24 @@ export function createWorker(ctx: AppContext, io: SocketServer): Worker<QueueJob
   worker.on('failed', async (job, err) => {
     if (!job) return;
     const { jobId, projectId } = job.data;
-    await ctx.prisma.job.update({
-      where: { id: jobId },
-      data: {
-        status: job.attemptsMade >= (job.opts.attempts ?? 1) ? 'failed' : 'retrying',
-        attempts: job.attemptsMade,
-        error: err.message,
-        finishedAt: new Date(),
-      },
-    });
-    io.emit('job:failed', { jobId, error: err.message });
-    await settleProjectStatus(ctx, projectId);
+    try {
+      // updateMany não lança P2025 quando o Job foi apagado do banco mas o
+      // job BullMQ sobreviveu no Redis (ex: retry pendente de um boot antigo)
+      // — sem isso, um job órfão derruba o processo inteiro.
+      await ctx.prisma.job.updateMany({
+        where: { id: jobId },
+        data: {
+          status: job.attemptsMade >= (job.opts.attempts ?? 1) ? 'failed' : 'retrying',
+          attempts: job.attemptsMade,
+          error: err.message,
+          finishedAt: new Date(),
+        },
+      });
+      io.emit('job:failed', { jobId, error: err.message });
+      await settleProjectStatus(ctx, projectId);
+    } catch (e) {
+      console.error('Falha ao registrar job com erro', jobId, e);
+    }
   });
 
   return worker;

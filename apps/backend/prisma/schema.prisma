@@ -82,6 +82,8 @@ model OcrRegion {
   confidence     Float
   readingOrder   Int?
   orientation    String?
+  // true = criada/editada pelo usuário; preservada ao re-rodar o pipeline
+  manual         Boolean @default(false)
 
   @@index([pageId])
 }
