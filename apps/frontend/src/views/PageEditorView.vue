@@ -32,6 +32,9 @@ const createRegion = useMutation({
     invalidate();
     selectedId.value = region.id;
     mode.value = 'select';
+    // Região desenhada à mão nasce vazia: já dispara OCR + tradução do recorte
+    autoReanalyzed.add(region.id);
+    reanalyzeRegion.mutate(region.id);
   },
 });
 const deleteRegion = useMutation({
@@ -74,9 +77,16 @@ const selected = computed(() => regions.value.find((r) => r.id === selectedId.va
 // Formulário do painel lateral (sincronizado com a seleção)
 const formSource = ref('');
 const formTranslated = ref('');
+// Captação automática ao selecionar uma região ainda sem texto (uma vez por
+// região, para não repetir OCR a cada clique).
+const autoReanalyzed = new Set<string>();
 watch(selected, (r) => {
   formSource.value = r?.sourceText ?? '';
   formTranslated.value = r?.translatedText ?? '';
+  if (r && !r.sourceText && !autoReanalyzed.has(r.id) && !reanalyzeRegion.isPending.value) {
+    autoReanalyzed.add(r.id);
+    reanalyzeRegion.mutate(r.id);
+  }
 });
 
 function onImgLoad(e: Event) {
@@ -265,10 +275,12 @@ const handleStyle: Record<string, string> = {
 </script>
 
 <template>
-  <div v-if="page.data.value" class="flex gap-6">
-    <!-- Coluna principal: imagem + overlay -->
-    <div class="min-w-0 flex-1">
-      <div class="mb-4 flex items-center gap-3">
+  <div v-if="page.data.value">
+    <!-- Header fixo com as ações do editor -->
+    <div
+      class="sticky top-0 z-20 -mx-8 -mt-8 mb-6 border-b border-slate-800 bg-slate-950/90 px-8 py-3 backdrop-blur"
+    >
+      <div class="flex items-center gap-3">
         <RouterLink
           :to="{ name: 'project-detail', params: { id: projectId } }"
           class="text-sm text-sky-400 hover:underline"
@@ -305,7 +317,11 @@ const handleStyle: Record<string, string> = {
           </button>
         </div>
       </div>
+    </div>
 
+    <div class="flex gap-6">
+    <!-- Coluna principal: imagem + overlay -->
+    <div class="min-w-0 flex-1">
       <div
         ref="imgWrapper"
         class="relative inline-block max-w-full select-none touch-none"
@@ -358,7 +374,7 @@ const handleStyle: Record<string, string> = {
 
     <!-- Painel lateral -->
     <aside class="w-80 shrink-0">
-      <div class="sticky top-6 rounded-lg border border-slate-800 bg-slate-900/60 p-4">
+      <div class="sticky top-20 rounded-lg border border-slate-800 bg-slate-900/60 p-4">
         <template v-if="selected">
           <h3 class="mb-3 text-sm font-medium text-slate-300">Região selecionada</h3>
           <label class="mb-1 block text-xs text-slate-500">Texto original</label>
@@ -426,6 +442,7 @@ const handleStyle: Record<string, string> = {
         </p>
       </div>
     </aside>
+    </div>
   </div>
   <p v-else-if="page.isError.value" class="text-rose-400">{{ page.error.value?.message }}</p>
   <p v-else class="text-slate-500">Carregando…</p>
