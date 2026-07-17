@@ -43,7 +43,7 @@ function onDeleteClick(id: string) {
 
 <template>
   <div>
-    <div class="mb-6 flex items-center justify-between">
+    <div class="mb-6 flex flex-wrap items-center justify-between gap-3">
       <h2 class="text-2xl font-semibold">Projetos</h2>
       <button
         v-if="auth.canEdit"

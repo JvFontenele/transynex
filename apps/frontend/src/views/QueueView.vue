@@ -76,7 +76,8 @@ const FILTERS = ['active', 'queued', 'completed', 'failed'];
       </div>
     </div>
 
-    <table v-if="filtered.length" class="w-full text-sm">
+    <div v-if="filtered.length" class="overflow-x-auto">
+    <table class="w-full min-w-xl text-sm">
       <thead>
         <tr class="border-b border-slate-800 text-left text-xs text-slate-500">
           <th class="py-2 pr-4 font-normal">Etapa</th>
@@ -113,6 +114,7 @@ const FILTERS = ['active', 'queued', 'completed', 'failed'];
         </tr>
       </tbody>
     </table>
+    </div>
 
     <EmptyState
       v-else-if="jobs.isSuccess.value"

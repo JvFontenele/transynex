@@ -218,7 +218,7 @@ const saveRegion = useMutation({
       </button>
       <p v-if="run.error.value" class="text-xs text-rose-400">{{ run.error.value.message }}</p>
 
-      <div class="ml-auto flex items-center gap-2">
+      <div class="ml-auto flex flex-wrap items-center gap-2">
         <span class="text-sm text-slate-400">Exportar</span>
         <select
           v-model="exportFormat"
@@ -364,7 +364,7 @@ const saveRegion = useMutation({
         v-if="reviewPage"
         class="mb-8 rounded-lg border border-slate-800 bg-slate-900/60 p-4"
       >
-        <div class="mb-3 flex items-center justify-between">
+        <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
           <h3 class="text-sm font-medium">
             Textos da página {{ reviewPage.order + 1 }}
             <span class="ml-2 text-xs font-normal text-slate-500">
@@ -378,7 +378,8 @@ const saveRegion = useMutation({
             Abrir no editor visual →
           </RouterLink>
         </div>
-        <table class="w-full text-sm">
+        <div class="overflow-x-auto">
+        <table class="w-full min-w-lg text-sm">
           <thead>
             <tr class="border-b border-slate-800 text-left text-xs text-slate-500">
               <th class="py-2 pr-4 font-normal">Original</th>
@@ -426,6 +427,7 @@ const saveRegion = useMutation({
             </tr>
           </tbody>
         </table>
+        </div>
       </div>
     </template>
 

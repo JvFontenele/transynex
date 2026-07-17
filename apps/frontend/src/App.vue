@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { api } from './api';
 import { useAuthStore } from './stores/auth';
@@ -15,6 +15,10 @@ async function logout() {
   await auth.logout();
   router.push({ name: 'login' });
 }
+
+// Menu lateral vira drawer em telas pequenas.
+const sidebarOpen = ref(false);
+watch(() => route.fullPath, () => (sidebarOpen.value = false));
 
 // Troca de senha (modal simples, sem dependência de UI lib)
 const showPassword = ref(false);
@@ -78,10 +82,44 @@ const nav = computed(() => allNav.filter((item) => !item.adminOnly || auth.isAdm
 
 <template>
   <div class="min-h-screen bg-slate-950 text-slate-100">
+    <!-- Topbar mobile com hamburger -->
+    <header
+      v-if="!route.meta.public && !route.meta.immersive"
+      class="sticky top-0 z-30 flex items-center gap-3 border-b border-slate-800 bg-slate-950/90 px-4 py-3 backdrop-blur lg:hidden"
+    >
+      <button
+        class="rounded-md p-1.5 text-slate-300 hover:bg-slate-800"
+        aria-label="Abrir menu"
+        @click="sidebarOpen = true"
+      >
+        <svg
+          viewBox="0 0 24 24"
+          class="h-5 w-5"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+        >
+          <path d="M4 6h16M4 12h16M4 18h16" />
+        </svg>
+      </button>
+      <RouterLink to="/" class="text-lg font-bold tracking-tight">
+        Trans<span class="text-sky-400">ynex</span>
+      </RouterLink>
+    </header>
+
     <div class="flex">
+      <!-- Backdrop do drawer mobile -->
+      <div
+        v-if="sidebarOpen && !route.meta.public && !route.meta.immersive"
+        class="fixed inset-0 z-40 bg-black/60 lg:hidden"
+        @click="sidebarOpen = false"
+      />
+
       <aside
         v-if="!route.meta.public && !route.meta.immersive"
-        class="sticky top-0 flex h-screen w-56 shrink-0 flex-col border-r border-slate-800 bg-slate-900/60 p-4"
+        class="fixed inset-y-0 left-0 z-50 flex h-screen w-56 shrink-0 flex-col border-r border-slate-800 bg-slate-900 p-4 transition-transform duration-200 lg:sticky lg:top-0 lg:z-auto lg:translate-x-0 lg:bg-slate-900/60 lg:transition-none"
+        :class="sidebarOpen ? 'translate-x-0' : '-translate-x-full'"
       >
         <RouterLink to="/" class="mb-6 block">
           <h1 class="text-xl font-bold tracking-tight">
@@ -148,7 +186,7 @@ const nav = computed(() => allNav.filter((item) => !item.adminOnly || auth.isAdm
         </div>
       </aside>
 
-      <main class="min-w-0 flex-1" :class="route.meta.immersive ? '' : 'p-8'">
+      <main class="min-w-0 flex-1" :class="route.meta.immersive ? '' : 'p-4 sm:p-8'">
         <RouterView />
       </main>
     </div>
@@ -156,11 +194,11 @@ const nav = computed(() => allNav.filter((item) => !item.adminOnly || auth.isAdm
     <!-- Modal de troca de senha -->
     <div
       v-if="showPassword"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
       @click.self="showPassword = false"
     >
       <form
-        class="w-80 space-y-3 rounded-lg border border-slate-800 bg-slate-900 p-5"
+        class="w-80 max-w-full space-y-3 rounded-lg border border-slate-800 bg-slate-900 p-5"
         @submit.prevent="changePassword"
       >
         <h2 class="text-sm font-semibold">Trocar senha</h2>

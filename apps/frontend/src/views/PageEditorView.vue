@@ -278,9 +278,9 @@ const handleStyle: Record<string, string> = {
   <div v-if="page.data.value">
     <!-- Header fixo com as ações do editor -->
     <div
-      class="sticky top-0 z-20 -mx-8 -mt-8 mb-6 border-b border-slate-800 bg-slate-950/90 px-8 py-3 backdrop-blur"
+      class="sticky top-14.25 z-20 -mx-4 -mt-4 mb-6 border-b border-slate-800 bg-slate-950/90 px-4 py-3 backdrop-blur sm:-mx-8 sm:-mt-8 sm:px-8 lg:top-0"
     >
-      <div class="flex items-center gap-3">
+      <div class="flex flex-wrap items-center gap-3">
         <RouterLink
           :to="{ name: 'project-detail', params: { id: projectId } }"
           class="text-sm text-sky-400 hover:underline"
@@ -288,7 +288,7 @@ const handleStyle: Record<string, string> = {
           ← Voltar ao projeto
         </RouterLink>
         <h2 class="text-lg font-semibold">Página {{ page.data.value.order + 1 }}</h2>
-        <div class="ml-auto flex items-center gap-2">
+        <div class="ml-auto flex flex-wrap items-center gap-2">
           <button
             class="rounded-md px-3 py-1.5 text-sm"
             :class="
@@ -319,7 +319,7 @@ const handleStyle: Record<string, string> = {
       </div>
     </div>
 
-    <div class="flex gap-6">
+    <div class="flex flex-col gap-6 lg:flex-row">
     <!-- Coluna principal: imagem + overlay -->
     <div class="min-w-0 flex-1">
       <div
@@ -373,8 +373,8 @@ const handleStyle: Record<string, string> = {
     </div>
 
     <!-- Painel lateral -->
-    <aside class="w-80 shrink-0">
-      <div class="sticky top-20 rounded-lg border border-slate-800 bg-slate-900/60 p-4">
+    <aside class="w-full shrink-0 lg:w-80">
+      <div class="rounded-lg border border-slate-800 bg-slate-900/60 p-4 lg:sticky lg:top-20">
         <template v-if="selected">
           <h3 class="mb-3 text-sm font-medium text-slate-300">Região selecionada</h3>
           <label class="mb-1 block text-xs text-slate-500">Texto original</label>

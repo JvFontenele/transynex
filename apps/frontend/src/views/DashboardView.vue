@@ -27,7 +27,7 @@ const recentProjects = computed(() => projects.data.value?.slice(0, 5) ?? []);
 
 <template>
   <div>
-    <div class="mb-6 flex items-center justify-between">
+    <div class="mb-6 flex flex-wrap items-center justify-between gap-3">
       <h2 class="text-2xl font-semibold">Dashboard</h2>
       <RouterLink
         to="/projects"

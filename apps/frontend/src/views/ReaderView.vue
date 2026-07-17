@@ -51,7 +51,7 @@ const widthClass = computed(
   <div class="min-h-screen">
     <!-- Barra fixa do leitor -->
     <header
-      class="sticky top-0 z-20 flex items-center gap-3 border-b border-slate-800 bg-slate-950/90 px-4 py-2.5 backdrop-blur"
+      class="sticky top-0 z-20 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-slate-800 bg-slate-950/90 px-4 py-2.5 backdrop-blur"
     >
       <RouterLink
         :to="{ name: 'project-detail', params: { id: projectId } }"
