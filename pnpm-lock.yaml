@@ -20,19 +20,19 @@ importers:
 
   apps/cli:
     dependencies:
-      '@hub/core-contracts':
+      '@transynex/core-contracts':
         specifier: workspace:*
         version: link:../../packages/core-contracts
-      '@hub/ocr-tesseract':
+      '@transynex/ocr-tesseract':
         specifier: workspace:*
         version: link:../../plugins/ocr-tesseract
-      '@hub/storage-local':
+      '@transynex/storage-local':
         specifier: workspace:*
         version: link:../../plugins/storage-local
-      '@hub/translation-libretranslate':
+      '@transynex/translation-libretranslate':
         specifier: workspace:*
         version: link:../../plugins/translation-libretranslate
-      '@hub/translation-ollama':
+      '@transynex/translation-ollama':
         specifier: workspace:*
         version: link:../../plugins/translation-ollama
 
@@ -40,7 +40,7 @@ importers:
 
   plugins/ocr-tesseract:
     dependencies:
-      '@hub/core-contracts':
+      '@transynex/core-contracts':
         specifier: workspace:*
         version: link:../../packages/core-contracts
       tesseract.js:
@@ -49,19 +49,19 @@ importers:
 
   plugins/storage-local:
     dependencies:
-      '@hub/core-contracts':
+      '@transynex/core-contracts':
         specifier: workspace:*
         version: link:../../packages/core-contracts
 
   plugins/translation-libretranslate:
     dependencies:
-      '@hub/core-contracts':
+      '@transynex/core-contracts':
         specifier: workspace:*
         version: link:../../packages/core-contracts
 
   plugins/translation-ollama:
     dependencies:
-      '@hub/core-contracts':
+      '@transynex/core-contracts':
         specifier: workspace:*
         version: link:../../packages/core-contracts
 

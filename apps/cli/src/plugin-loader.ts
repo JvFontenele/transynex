@@ -4,7 +4,7 @@ import type {
   Provider,
   ProviderRegistry,
   StorageProvider,
-} from '@hub/core-contracts';
+} from '@transynex/core-contracts';
 
 interface PluginsConfig {
   plugins: string[];

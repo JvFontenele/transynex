@@ -6,10 +6,10 @@ import {
   DefaultProviderRegistry,
   type OCRProvider,
   type TranslationProvider,
-} from '@hub/core-contracts';
+} from '@transynex/core-contracts';
 import { loadPlugins } from './plugin-loader.js';
 
-const HELP = `AI Translation Hub — CLI (pipeline mínimo offline)
+const HELP = `Transynex — CLI (pipeline mínimo offline)
 
 Uso:
   pnpm cli --image <arquivo> --from <idioma> --to <idioma> [opções]
@@ -48,10 +48,10 @@ const appDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 // Config por provider viria do banco (ProviderConfig) no backend; na fase CLI,
 // de variáveis de ambiente.
 const providerConfigs: Record<string, Record<string, unknown>> = {
-  'storage-local': { baseDir: process.env.HUB_STORAGE_DIR ?? './storage' },
+  'storage-local': { baseDir: process.env.TRANSYNEX_STORAGE_DIR ?? './storage' },
   'tesseract-ocr': {
     languages: values.from ? [values.from] : undefined,
-    cachePath: process.env.HUB_MODELS_DIR ?? './models/tesseract',
+    cachePath: process.env.TRANSYNEX_MODELS_DIR ?? './models/tesseract',
   },
   'ollama-translation': {
     baseUrl: process.env.OLLAMA_URL,

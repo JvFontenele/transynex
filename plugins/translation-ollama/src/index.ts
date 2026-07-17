@@ -6,13 +6,13 @@ import type {
   TranslationInput,
   TranslationProvider,
   TranslationResult,
-} from '@hub/core-contracts';
+} from '@transynex/core-contracts';
 
 const metadata: ProviderMetadata = {
   id: 'ollama-translation',
   name: 'Ollama',
   version: '0.1.0',
-  author: 'AI Translation Hub',
+  author: 'Transynex',
   description: 'Tradução via LLM local servido pelo Ollama.',
   type: 'translation',
   requiresGPU: false,

@@ -8,13 +8,13 @@ import type {
   PluginManifest,
   ProviderMetadata,
   StorageProvider,
-} from '@hub/core-contracts';
+} from '@transynex/core-contracts';
 
 const metadata: ProviderMetadata = {
   id: 'tesseract-ocr',
   name: 'Tesseract OCR',
   version: '0.1.0',
-  author: 'AI Translation Hub',
+  author: 'Transynex',
   description: 'OCR offline via tesseract.js (WASM). Baixa traineddata na primeira execução e cacheia localmente.',
   type: 'ocr',
   requiresGPU: false,

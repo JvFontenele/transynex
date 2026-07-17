@@ -1,5 +1,5 @@
 {
-  "name": "@hub/translation-libretranslate",
+  "name": "@transynex/translation-libretranslate",
   "version": "0.1.0",
   "type": "module",
   "main": "src/index.ts",
@@ -8,6 +8,6 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@hub/core-contracts": "workspace:*"
+    "@transynex/core-contracts": "workspace:*"
   }
 }

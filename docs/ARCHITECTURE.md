@@ -1,4 +1,6 @@
-# AI Translation Hub — Arquitetura de Providers
+# Transynex — Arquitetura de Providers
+
+> **Transynex** — The Open Translation Orchestrator (Trans = tradução, Syn = sinergia/sinapse, Nex = nexus/hub).
 
 Design das interfaces centrais do sistema, antes de qualquer implementação. Escopo desta fase: contratos de Provider, orquestração de pipeline, sistema de jobs, contratos de API e schema de banco. Providers concretos usados como referência de validação do design (apenas assinatura/estrutura, sem implementação): `LocalStorageProvider`, `TesseractOCRProvider`, `OllamaTranslationProvider` e `LibreTranslateProvider` — todos offline, cobrindo o objetivo central do projeto.
 

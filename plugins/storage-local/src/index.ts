@@ -7,13 +7,13 @@ import type {
   PluginManifest,
   ProviderMetadata,
   StorageProvider,
-} from '@hub/core-contracts';
+} from '@transynex/core-contracts';
 
 const metadata: ProviderMetadata = {
   id: 'storage-local',
   name: 'Armazenamento local',
   version: '0.1.0',
-  author: 'AI Translation Hub',
+  author: 'Transynex',
   description: 'Armazena arquivos no sistema de arquivos local.',
   type: 'storage',
   requiresGPU: false,

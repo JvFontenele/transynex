@@ -1,4 +1,4 @@
-// Contratos centrais do AI Translation Hub — ver docs/ARCHITECTURE.md.
+// Contratos centrais do Transynex — ver docs/ARCHITECTURE.md.
 // O Core (orquestrador, API, jobs) só conhece este pacote; nunca importa
 // uma implementação concreta de provider.
 

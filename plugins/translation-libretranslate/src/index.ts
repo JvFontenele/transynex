@@ -6,13 +6,13 @@ import type {
   TranslationInput,
   TranslationProvider,
   TranslationResult,
-} from '@hub/core-contracts';
+} from '@transynex/core-contracts';
 
 const metadata: ProviderMetadata = {
   id: 'libretranslate',
   name: 'LibreTranslate',
   version: '0.1.0',
-  author: 'AI Translation Hub',
+  author: 'Transynex',
   description: 'Tradução via instância LibreTranslate self-hosted (Argos Translate).',
   type: 'translation',
   requiresGPU: false,
