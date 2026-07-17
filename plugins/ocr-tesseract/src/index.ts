@@ -37,6 +37,27 @@ const metadata: ProviderMetadata = {
   },
 };
 
+// O sistema usa ISO 639-1 como código canônico de idioma; o Tesseract usa
+// códigos de traineddata (ISO 639-2/T). Códigos de 3 letras passam direto.
+const ISO_TO_TESSERACT: Record<string, string> = {
+  en: 'eng',
+  pt: 'por',
+  ja: 'jpn',
+  zh: 'chi_sim',
+  ko: 'kor',
+  es: 'spa',
+  fr: 'fra',
+  de: 'deu',
+  it: 'ita',
+  ru: 'rus',
+  ar: 'ara',
+  nl: 'nld',
+};
+
+function toTesseractLang(code: string): string {
+  return ISO_TO_TESSERACT[code] ?? code;
+}
+
 export class TesseractOCRProvider implements OCRProvider {
   readonly metadata = metadata;
   private languages = ['eng'];
@@ -47,7 +68,7 @@ export class TesseractOCRProvider implements OCRProvider {
 
   async configure(config: Record<string, unknown>): Promise<void> {
     if (Array.isArray(config.languages) && config.languages.length > 0) {
-      this.languages = config.languages.map(String);
+      this.languages = config.languages.map((l) => toTesseractLang(String(l)));
     }
     if (typeof config.cachePath === 'string') {
       this.cachePath = config.cachePath;
@@ -67,7 +88,9 @@ export class TesseractOCRProvider implements OCRProvider {
 
   async recognize(input: OCRInput): Promise<OCRResult> {
     const start = Date.now();
-    const langs = input.languageHint?.length ? input.languageHint : this.languages;
+    const langs = input.languageHint?.length
+      ? input.languageHint.map(toTesseractLang)
+      : this.languages;
     const worker = await this.getWorker(langs);
     const image = await this.storage.read(input.imageRef);
 

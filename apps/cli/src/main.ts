@@ -17,7 +17,7 @@ Uso:
 
 Opções:
   --image <path>        Imagem de entrada (png/jpeg/webp)
-  --from <lang>         Idioma de origem (ex: eng, jpn) — também usado como hint do OCR
+  --from <lang>         Idioma de origem (ex: en, ja) — código ISO 639-1 — também usado como hint do OCR
   --to <lang>           Idioma de destino (ex: pt)
   --ocr <id>            Provider de OCR      (default: tesseract-ocr)
   --translator <id>     Provider de tradução (default: ollama-translation)

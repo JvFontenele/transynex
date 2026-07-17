@@ -119,6 +119,8 @@ interface OCRProvider extends Provider {
 
 Decisão de design: `imageRef` (string) em vez de `Buffer` — o provider busca o binário via `StorageProvider` injetado, então rodar OCR remoto (ex: Google Vision) não exige transferir a imagem inteira pelo orquestrador.
 
+Decisão de design (descoberta na integração real): **o sistema usa ISO 639-1 como código canônico de idioma** em todas as interfaces (`languageHint`, `sourceLanguage`, `targetLanguage`). Cada provider converte internamente para seu formato nativo — Tesseract mapeia `en → eng`, `ja → jpn` etc.; LibreTranslate já usa 639-1 nativamente. Sem isso, trocar de provider quebraria a configuração de idiomas do projeto.
+
 ### 3.2 TranslationProvider
 
 ```typescript
