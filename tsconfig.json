@@ -1,0 +1,11 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/core-contracts" },
+    { "path": "plugins/storage-local" },
+    { "path": "plugins/ocr-tesseract" },
+    { "path": "plugins/translation-ollama" },
+    { "path": "plugins/translation-libretranslate" },
+    { "path": "apps/cli" }
+  ]
+}

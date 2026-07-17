@@ -1,0 +1,12 @@
+{
+  "name": "@hub/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "dependencies": {
+    "@hub/core-contracts": "workspace:*",
+    "@hub/ocr-tesseract": "workspace:*",
+    "@hub/storage-local": "workspace:*",
+    "@hub/translation-libretranslate": "workspace:*",
+    "@hub/translation-ollama": "workspace:*"
+  }
+}

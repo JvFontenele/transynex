@@ -1,0 +1,9 @@
+{
+  "plugins": [
+    "@hub/storage-local",
+    "@hub/ocr-tesseract",
+    "@hub/translation-ollama",
+    "@hub/translation-libretranslate"
+  ],
+  "defaultStorage": "storage-local"
+}
