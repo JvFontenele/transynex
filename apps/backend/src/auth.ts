@@ -17,6 +17,15 @@ export interface AuthHelpers {
   exportDownloadUrlFor(artifactId: string): string;
 }
 
+/** Payload do access token, disponível em req.user após o hook global. */
+export interface Actor {
+  sub: string;
+  email: string;
+  role: 'ADMIN' | 'EDITOR' | 'VIEWER';
+}
+
+export const actorOf = (req: { user: unknown }): Actor => req.user as Actor;
+
 export async function registerAuth(app: FastifyInstance, ctx: AppContext): Promise<AuthHelpers> {
   const secret = process.env.JWT_SECRET;
   if (!secret) {
@@ -32,7 +41,7 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext): Promi
     const password = process.env.ADMIN_PASSWORD;
     if (email && password) {
       await ctx.prisma.user.create({
-        data: { email, passwordHash: await argon2.hash(password) },
+        data: { email, passwordHash: await argon2.hash(password), role: 'ADMIN' },
       });
       app.log.info({ email }, 'Usuário admin inicial criado');
     } else {
@@ -113,7 +122,41 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext): Promi
     } catch {
       return reply.code(401).send({ error: 'Não autenticado' });
     }
+    // VIEWER é somente-leitura em toda a API; exceção: /api/v1/me/*
+    // (trocar a própria senha é permitido a qualquer papel).
+    const { role } = actorOf(req);
+    if (
+      role === 'VIEWER' &&
+      req.method !== 'GET' &&
+      req.method !== 'HEAD' &&
+      !url.startsWith('/api/v1/me/')
+    ) {
+      return reply.code(403).send({ error: 'Acesso somente-leitura' });
+    }
   });
+
+  // Troca da própria senha (fora de /auth/ para exigir Bearer).
+  app.post<{ Body: { currentPassword: string; newPassword: string } }>(
+    '/api/v1/me/password',
+    async (req, reply) => {
+      const { currentPassword, newPassword } = req.body ?? {};
+      if (!currentPassword || !newPassword) {
+        return reply.code(400).send({ error: 'currentPassword e newPassword são obrigatórios' });
+      }
+      if (newPassword.length < 8) {
+        return reply.code(400).send({ error: 'A nova senha deve ter ao menos 8 caracteres' });
+      }
+      const user = await ctx.prisma.user.findUnique({ where: { id: actorOf(req).sub } });
+      if (!user || !(await argon2.verify(user.passwordHash, currentPassword))) {
+        return reply.code(401).send({ error: 'Senha atual incorreta' });
+      }
+      await ctx.prisma.user.update({
+        where: { id: user.id },
+        data: { passwordHash: await argon2.hash(newPassword) },
+      });
+      return reply.code(204).send();
+    },
+  );
 
   return {
     fileUrlFor: (ref) =>

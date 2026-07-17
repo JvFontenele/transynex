@@ -10,7 +10,7 @@ import type {
 } from '@transynex/core-contracts';
 import type { Prisma } from '@prisma/client';
 import type { AppContext } from './context.js';
-import type { AuthHelpers } from './auth.js';
+import { actorOf, type Actor, type AuthHelpers } from './auth.js';
 import { decryptSecrets, encryptSecrets } from './secrets.js';
 import type { QueueJobData } from './queue.js';
 
@@ -38,6 +38,16 @@ export function registerRoutes(
     sourceImageUrl: auth.fileUrlFor(page.sourceImageRef),
     renderedImageUrl: page.renderedImageRef ? auth.fileUrlFor(page.renderedImageRef) : null,
   });
+  // Escopo por dono (ARCHITECTURE §acessos): ADMIN e VIEWER enxergam todos
+  // os projetos; EDITOR só os próprios. Recursos fora do escopo respondem
+  // 404 (não vazar existência). Mutações de VIEWER já são barradas pelo
+  // hook global em auth.ts.
+  const projectScope = (a: Actor): Prisma.ProjectWhereInput =>
+    a.role === 'EDITOR' ? { ownerId: a.sub } : {};
+
+  const scopedProject = (a: Actor, id: string) =>
+    ctx.prisma.project.findFirst({ where: { id, ...projectScope(a) } });
+
   // --- Projects ---------------------------------------------------------
 
   app.post<{ Body: { name: string; sourceLanguage: string; targetLanguage: string } }>(
@@ -48,22 +58,23 @@ export function registerRoutes(
         return reply.code(400).send({ error: 'name, sourceLanguage e targetLanguage são obrigatórios' });
       }
       const project = await ctx.prisma.project.create({
-        data: { name, sourceLanguage, targetLanguage },
+        data: { name, sourceLanguage, targetLanguage, ownerId: actorOf(req).sub },
       });
       return reply.code(201).send(project);
     },
   );
 
-  app.get('/api/v1/projects', async () =>
+  app.get('/api/v1/projects', async (req) =>
     ctx.prisma.project.findMany({
+      where: projectScope(actorOf(req)),
       orderBy: { createdAt: 'desc' },
       include: { _count: { select: { pages: true, jobs: true } } },
     }),
   );
 
   app.get<{ Params: { id: string } }>('/api/v1/projects/:id', async (req, reply) => {
-    const project = await ctx.prisma.project.findUnique({
-      where: { id: req.params.id },
+    const project = await ctx.prisma.project.findFirst({
+      where: { id: req.params.id, ...projectScope(actorOf(req)) },
       include: { sourceFiles: true, _count: { select: { pages: true } } },
     });
     if (!project) return reply.code(404).send({ error: 'Projeto não encontrado' });
@@ -71,7 +82,9 @@ export function registerRoutes(
   });
 
   app.delete<{ Params: { id: string } }>('/api/v1/projects/:id', async (req, reply) => {
-    await ctx.prisma.project.delete({ where: { id: req.params.id } });
+    const project = await scopedProject(actorOf(req), req.params.id);
+    if (!project) return reply.code(404).send({ error: 'Projeto não encontrado' });
+    await ctx.prisma.project.delete({ where: { id: project.id } });
     return reply.code(204).send();
   });
 
@@ -79,7 +92,7 @@ export function registerRoutes(
   // Imagens viram Page direto; PDF/CBZ/ZIP disparam um job 'extraction'.
 
   app.post<{ Params: { id: string } }>('/api/v1/projects/:id/uploads', async (req, reply) => {
-    const project = await ctx.prisma.project.findUnique({ where: { id: req.params.id } });
+    const project = await scopedProject(actorOf(req), req.params.id);
     if (!project) return reply.code(404).send({ error: 'Projeto não encontrado' });
 
     const file = await req.file();
@@ -154,7 +167,10 @@ export function registerRoutes(
     );
   };
 
-  app.get<{ Params: { id: string } }>('/api/v1/projects/:id/pages', async (req) => {
+  app.get<{ Params: { id: string } }>('/api/v1/projects/:id/pages', async (req, reply) => {
+    if (!(await scopedProject(actorOf(req), req.params.id))) {
+      return reply.code(404).send({ error: 'Projeto não encontrado' });
+    }
     const pages = await ctx.prisma.page.findMany({
       where: { projectId: req.params.id },
       orderBy: { order: 'asc' },
@@ -167,6 +183,9 @@ export function registerRoutes(
   app.post<{ Params: { id: string }; Body: { pageIds: string[] } }>(
     '/api/v1/projects/:id/pages/reorder',
     async (req, reply) => {
+      if (!(await scopedProject(actorOf(req), req.params.id))) {
+        return reply.code(404).send({ error: 'Projeto não encontrado' });
+      }
       const pageIds = req.body?.pageIds;
       if (!Array.isArray(pageIds) || pageIds.some((id) => typeof id !== 'string')) {
         return reply.code(400).send({ error: 'pageIds inválido: esperado array de ids' });
@@ -198,8 +217,8 @@ export function registerRoutes(
   );
 
   app.get<{ Params: { id: string } }>('/api/v1/pages/:id', async (req, reply) => {
-    const page = await ctx.prisma.page.findUnique({
-      where: { id: req.params.id },
+    const page = await ctx.prisma.page.findFirst({
+      where: { id: req.params.id, project: projectScope(actorOf(req)) },
       include: { ocrRegions: { orderBy: { readingOrder: 'asc' } } },
     });
     if (!page) return reply.code(404).send({ error: 'Página não encontrada' });
@@ -210,7 +229,9 @@ export function registerRoutes(
     Params: { id: string };
     Body: { boundingBox: object; sourceText?: string; translatedText?: string };
   }>('/api/v1/pages/:id/regions', async (req, reply) => {
-    const page = await ctx.prisma.page.findUnique({ where: { id: req.params.id } });
+    const page = await ctx.prisma.page.findFirst({
+      where: { id: req.params.id, project: projectScope(actorOf(req)) },
+    });
     if (!page) return reply.code(404).send({ error: 'Página não encontrada' });
     if (!isValidBoundingBox(req.body?.boundingBox)) {
       return reply.code(400).send({ error: 'boundingBox inválido: esperado {x, y, width, height} numéricos' });
@@ -239,7 +260,9 @@ export function registerRoutes(
     Params: { id: string };
     Body: { sourceText?: string; translatedText?: string; boundingBox?: object };
   }>('/api/v1/regions/:id', async (req, reply) => {
-    const region = await ctx.prisma.ocrRegion.findUnique({ where: { id: req.params.id } });
+    const region = await ctx.prisma.ocrRegion.findFirst({
+      where: { id: req.params.id, page: { project: projectScope(actorOf(req)) } },
+    });
     if (!region) return reply.code(404).send({ error: 'Região não encontrada' });
     if (req.body.boundingBox !== undefined && !isValidBoundingBox(req.body.boundingBox)) {
       return reply.code(400).send({ error: 'boundingBox inválido: esperado {x, y, width, height} numéricos' });
@@ -260,7 +283,9 @@ export function registerRoutes(
   });
 
   app.delete<{ Params: { id: string } }>('/api/v1/regions/:id', async (req, reply) => {
-    const region = await ctx.prisma.ocrRegion.findUnique({ where: { id: req.params.id } });
+    const region = await ctx.prisma.ocrRegion.findFirst({
+      where: { id: req.params.id, page: { project: projectScope(actorOf(req)) } },
+    });
     if (!region) return reply.code(404).send({ error: 'Região não encontrada' });
     await ctx.prisma.ocrRegion.delete({ where: { id: region.id } });
     await dirtyPage(region.pageId);
@@ -270,8 +295,8 @@ export function registerRoutes(
   // Reanalisa uma região marcada manualmente: recorta a imagem original na
   // bounding box, roda OCR só no recorte e traduz o texto encontrado.
   app.post<{ Params: { id: string } }>('/api/v1/regions/:id/reanalyze', async (req, reply) => {
-    const region = await ctx.prisma.ocrRegion.findUnique({
-      where: { id: req.params.id },
+    const region = await ctx.prisma.ocrRegion.findFirst({
+      where: { id: req.params.id, page: { project: projectScope(actorOf(req)) } },
       include: { page: { include: { project: true } } },
     });
     if (!region) return reply.code(404).send({ error: 'Região não encontrada' });
@@ -340,8 +365,8 @@ export function registerRoutes(
   // Re-renderiza a página a partir das regiões atuais (editadas pelo usuário),
   // sem refazer OCR/tradução — refazer o pipeline apagaria as edições.
   app.post<{ Params: { id: string } }>('/api/v1/pages/:id/render', async (req, reply) => {
-    const page = await ctx.prisma.page.findUnique({
-      where: { id: req.params.id },
+    const page = await ctx.prisma.page.findFirst({
+      where: { id: req.params.id, project: projectScope(actorOf(req)) },
       include: { ocrRegions: { orderBy: { readingOrder: 'asc' } } },
     });
     if (!page) return reply.code(404).send({ error: 'Página não encontrada' });
@@ -385,7 +410,7 @@ export function registerRoutes(
         }
       | undefined;
   }>('/api/v1/projects/:id/run', async (req, reply) => {
-    const project = await ctx.prisma.project.findUnique({ where: { id: req.params.id } });
+    const project = await scopedProject(actorOf(req), req.params.id);
     if (!project) return reply.code(404).send({ error: 'Projeto não encontrado' });
 
     const ocrProviderId =
@@ -440,7 +465,7 @@ export function registerRoutes(
   app.post<{ Params: { id: string }; Body: { format: string } }>(
     '/api/v1/projects/:id/export',
     async (req, reply) => {
-      const project = await ctx.prisma.project.findUnique({ where: { id: req.params.id } });
+      const project = await scopedProject(actorOf(req), req.params.id);
       if (!project) return reply.code(404).send({ error: 'Projeto não encontrado' });
       const { format } = req.body;
       if (!EXPORT_FORMATS.has(format)) {
@@ -464,7 +489,10 @@ export function registerRoutes(
     },
   );
 
-  app.get<{ Params: { id: string } }>('/api/v1/projects/:id/exports', async (req) => {
+  app.get<{ Params: { id: string } }>('/api/v1/projects/:id/exports', async (req, reply) => {
+    if (!(await scopedProject(actorOf(req), req.params.id))) {
+      return reply.code(404).send({ error: 'Projeto não encontrado' });
+    }
     const artifacts = await ctx.prisma.exportArtifact.findMany({
       where: { projectId: req.params.id },
       orderBy: { createdAt: 'desc' },
@@ -520,14 +548,19 @@ export function registerRoutes(
 
   app.get<{ Querystring: { projectId?: string } }>('/api/v1/jobs', async (req) =>
     ctx.prisma.job.findMany({
-      where: req.query.projectId ? { projectId: req.query.projectId } : undefined,
+      where: {
+        ...(req.query.projectId ? { projectId: req.query.projectId } : {}),
+        project: projectScope(actorOf(req)),
+      },
       orderBy: { createdAt: 'desc' },
       take: 100,
     }),
   );
 
   app.get<{ Params: { id: string } }>('/api/v1/jobs/:id', async (req, reply) => {
-    const job = await ctx.prisma.job.findUnique({ where: { id: req.params.id } });
+    const job = await ctx.prisma.job.findFirst({
+      where: { id: req.params.id, project: projectScope(actorOf(req)) },
+    });
     if (!job) return reply.code(404).send({ error: 'Job não encontrado' });
     return job;
   });
@@ -589,6 +622,10 @@ export function registerRoutes(
   app.post<{ Params: { id: string }; Body: { config: Record<string, unknown> } }>(
     '/api/v1/providers/:id/configure',
     async (req, reply) => {
+      // Config de providers inclui chaves de API — só ADMIN mexe.
+      if (actorOf(req).role !== 'ADMIN') {
+        return reply.code(403).send({ error: 'Apenas administradores' });
+      }
       const meta = findMetadata(req.params.id);
       if (!meta) return reply.code(404).send({ error: 'Provider não encontrado' });
       const incoming = req.body?.config;
@@ -644,6 +681,9 @@ export function registerRoutes(
   );
 
   app.post<{ Params: { id: string } }>('/api/v1/providers/:id/default', async (req, reply) => {
+    if (actorOf(req).role !== 'ADMIN') {
+      return reply.code(403).send({ error: 'Apenas administradores' });
+    }
     const meta = findMetadata(req.params.id);
     if (!meta) return reply.code(404).send({ error: 'Provider não encontrado' });
     await ctx.prisma.$transaction([

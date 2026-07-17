@@ -5,6 +5,7 @@ import { registerAuth } from './auth.js';
 import { createContext } from './context.js';
 import { createQueue, createWorker } from './queue.js';
 import { registerRoutes } from './routes.js';
+import { registerUserRoutes } from './users.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 
@@ -15,6 +16,7 @@ await app.register(multipart, { limits: { fileSize: 100 * 1024 * 1024 } });
 
 const auth = await registerAuth(app, ctx);
 const queue = createQueue(ctx);
+registerUserRoutes(app, ctx);
 registerRoutes(app, ctx, queue, auth);
 
 await app.listen({ port: PORT, host: '0.0.0.0' });

@@ -2,11 +2,14 @@
 import { reactive, ref } from 'vue';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { api } from '../api';
+import { useAuthStore } from '../stores/auth';
 import { languageName, timeAgo } from '../lib/labels';
 import StatusBadge from '../components/StatusBadge.vue';
 import EmptyState from '../components/EmptyState.vue';
 import LanguageSelect from '../components/LanguageSelect.vue';
 
+// VIEWER é somente-leitura: esconde criar/excluir (o backend também bloqueia)
+const auth = useAuthStore();
 const queryClient = useQueryClient();
 const projects = useQuery({ queryKey: ['projects'], queryFn: api.listProjects });
 
@@ -43,6 +46,7 @@ function onDeleteClick(id: string) {
     <div class="mb-6 flex items-center justify-between">
       <h2 class="text-2xl font-semibold">Projetos</h2>
       <button
+        v-if="auth.canEdit"
         class="rounded-md bg-sky-600 px-4 py-2 text-sm font-medium hover:bg-sky-500"
         @click="showForm = !showForm"
       >
@@ -104,6 +108,7 @@ function onDeleteClick(id: string) {
         <div class="mt-3 flex items-center justify-between text-xs text-slate-500">
           <span>{{ p._count?.pages ?? 0 }} página(s) · criado {{ timeAgo(p.createdAt) }}</span>
           <button
+            v-if="auth.canEdit"
             class="opacity-0 transition group-hover:opacity-100"
             :class="
               confirmingDelete === p.id
@@ -126,6 +131,7 @@ function onDeleteClick(id: string) {
       hint="Crie um projeto para começar a traduzir mangás, quadrinhos e documentos."
     >
       <button
+        v-if="auth.canEdit"
         class="rounded-md bg-sky-600 px-4 py-2 text-sm font-medium hover:bg-sky-500"
         @click="showForm = true"
       >

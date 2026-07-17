@@ -12,6 +12,9 @@ export const useAuthStore = defineStore('auth', {
   }),
   getters: {
     isAuthenticated: (s) => s.accessToken !== null,
+    isAdmin: (s) => s.user?.role === 'ADMIN',
+    // VIEWER é somente-leitura (o backend também bloqueia)
+    canEdit: (s) => s.user !== null && s.user.role !== 'VIEWER',
   },
   actions: {
     _apply(accessToken: string, user: AuthUser) {

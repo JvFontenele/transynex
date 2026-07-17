@@ -31,13 +31,26 @@ export const router = createRouter({
     },
     { path: '/queue', name: 'queue', component: () => import('./views/QueueView.vue') },
     { path: '/plugins', name: 'plugins', component: () => import('./views/PluginsView.vue') },
-    { path: '/settings', name: 'settings', component: () => import('./views/SettingsView.vue') },
+    {
+      // Configura providers e chaves de API — só ADMIN
+      path: '/settings',
+      name: 'settings',
+      component: () => import('./views/SettingsView.vue'),
+      meta: { adminOnly: true },
+    },
+    {
+      path: '/users',
+      name: 'users',
+      component: () => import('./views/UsersView.vue'),
+      meta: { adminOnly: true },
+    },
   ],
 });
 
 router.beforeEach(async (to) => {
   if (to.meta.public) return true;
   const auth = useAuthStore();
-  if (await auth.tryRestore()) return true;
-  return { name: 'login', query: { redirect: to.fullPath } };
+  if (!(await auth.tryRestore())) return { name: 'login', query: { redirect: to.fullPath } };
+  if (to.meta.adminOnly && !auth.isAdmin) return { name: 'dashboard' };
+  return true;
 });

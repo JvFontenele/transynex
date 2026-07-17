@@ -7,11 +7,17 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum Role {
+  ADMIN
+  EDITOR
+  VIEWER
+}
+
 model User {
   id           String   @id @default(cuid())
   email        String   @unique
   passwordHash String
-  role         String   @default("admin")
+  role         Role     @default(EDITOR)
   createdAt    DateTime @default(now())
 
   projects Project[]

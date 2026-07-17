@@ -114,10 +114,20 @@ async function request<T>(path: string, init?: RequestInit, retried = false): Pr
   return res.json();
 }
 
+export type Role = 'ADMIN' | 'EDITOR' | 'VIEWER';
+
 export interface AuthUser {
   id: string;
   email: string;
-  role: string;
+  role: Role;
+}
+
+export interface User {
+  id: string;
+  email: string;
+  role: Role;
+  createdAt: string;
+  _count?: { projects: number };
 }
 
 export interface LoginResponse {
@@ -136,6 +146,29 @@ export const api = {
     }),
   refresh: () => request<LoginResponse>('/auth/refresh', { method: 'POST', credentials: 'include' }),
   logout: () => request<void>('/auth/logout', { method: 'POST', credentials: 'include' }),
+
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<void>('/me/password', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
+
+  // Gestão de usuários (rotas exclusivas de ADMIN)
+  listUsers: () => request<User[]>('/users'),
+  createUser: (data: { email: string; password: string; role: Role }) =>
+    request<User>('/users', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(data),
+    }),
+  updateUser: (id: string, data: { role?: Role; password?: string }) =>
+    request<User>(`/users/${id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(data),
+    }),
+  deleteUser: (id: string) => request<void>(`/users/${id}`, { method: 'DELETE' }),
 
   listProjects: () => request<Project[]>('/projects'),
   getProject: (id: string) => request<Project>(`/projects/${id}`),
