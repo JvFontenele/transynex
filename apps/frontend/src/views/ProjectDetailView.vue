@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
-import { api, downloadUrl, fileUrl } from '../api';
+import { api } from '../api';
 import { useJobsStore } from '../stores/jobs';
 
 const route = useRoute();
@@ -35,8 +35,14 @@ function onFileChange(e: Event) {
 }
 
 const runningJobIds = ref<string[]>([]);
+// Preservar regiões criadas/editadas à mão ao re-rodar o pipeline
+const preserveManual = ref(true);
 const run = useMutation({
-  mutationFn: () => api.run(projectId.value, { translationProviderId: translator.value }),
+  mutationFn: () =>
+    api.run(projectId.value, {
+      translationProviderId: translator.value,
+      preserveManual: preserveManual.value,
+    }),
   onSuccess: (data) => (runningJobIds.value = data.jobIds),
 });
 
@@ -105,6 +111,13 @@ const saveRegion = useMutation({
         </p>
       </div>
       <div class="flex items-center gap-3">
+        <label
+          class="flex cursor-pointer items-center gap-1.5 text-xs text-slate-400"
+          title="Regiões que você criou ou editou no editor são mantidas; só as detecções automáticas são refeitas. Desmarque para refazer tudo do zero."
+        >
+          <input v-model="preserveManual" type="checkbox" class="accent-sky-500" />
+          Manter minhas marcações
+        </label>
         <select
           v-model="translator"
           class="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
@@ -189,7 +202,7 @@ const saveRegion = useMutation({
         <a
           v-for="e in exports.data.value?.slice(0, 5)"
           :key="e.id"
-          :href="downloadUrl(e.id)"
+          :href="e.downloadUrl"
           class="rounded-md border border-slate-700 px-2 py-1 text-xs text-sky-400 hover:border-sky-600"
         >
           ⬇ {{ e.format }} ({{ (e.sizeBytes / 1024).toFixed(0) }} KB)
@@ -198,19 +211,27 @@ const saveRegion = useMutation({
     </div>
 
     <div v-for="page in pages.data.value" :key="page.id" class="mb-6">
-      <h3 class="mb-2 text-sm font-medium text-slate-400">Página {{ page.order + 1 }}</h3>
+      <div class="mb-2 flex items-center gap-3">
+        <h3 class="text-sm font-medium text-slate-400">Página {{ page.order + 1 }}</h3>
+        <RouterLink
+          :to="{ name: 'page-editor', params: { id: projectId, pageId: page.id } }"
+          class="text-xs text-sky-400 hover:underline"
+        >
+          Abrir editor
+        </RouterLink>
+      </div>
       <div class="mb-3 flex gap-4">
         <figure class="w-1/2">
           <img
-            :src="fileUrl(page.sourceImageRef)"
+            :src="page.sourceImageUrl"
             class="w-full rounded-lg border border-slate-800"
             loading="lazy"
           />
           <figcaption class="mt-1 text-center text-xs text-slate-600">Original</figcaption>
         </figure>
-        <figure v-if="page.renderedImageRef" class="w-1/2">
+        <figure v-if="page.renderedImageUrl" class="w-1/2">
           <img
-            :src="fileUrl(page.renderedImageRef)"
+            :src="page.renderedImageUrl"
             class="w-full rounded-lg border border-slate-800"
             loading="lazy"
           />

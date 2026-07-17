@@ -18,9 +18,10 @@ export const useJobsStore = defineStore('jobs', {
     socket: null as Socket | null,
   }),
   actions: {
-    connect() {
-      if (this.socket) return;
-      const socket = io();
+    connect(token: string) {
+      // Reconecta com o token novo após login/refresh.
+      if (this.socket) this.disconnect();
+      const socket = io({ auth: { token } });
       socket.on('connect', () => (this.connected = true));
       socket.on('disconnect', () => (this.connected = false));
       socket.on('job:progress', (e: JobEvent) => {
@@ -37,6 +38,11 @@ export const useJobsStore = defineStore('jobs', {
         };
       });
       this.socket = socket;
+    },
+    disconnect() {
+      this.socket?.disconnect();
+      this.socket = null;
+      this.connected = false;
     },
   },
 });

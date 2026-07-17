@@ -1,14 +1,24 @@
 <script setup lang="ts">
-import { onMounted } from 'vue';
+import { useRouter } from 'vue-router';
+import { useAuthStore } from './stores/auth';
 import { useJobsStore } from './stores/jobs';
 
+// O socket conecta após login/restore (auth store), não no mount.
 const jobs = useJobsStore();
-onMounted(() => jobs.connect());
+const auth = useAuthStore();
+const router = useRouter();
+
+async function logout() {
+  await auth.logout();
+  router.push({ name: 'login' });
+}
 
 const nav = [
   { to: '/', label: 'Dashboard' },
   { to: '/projects', label: 'Projetos' },
   { to: '/queue', label: 'Fila' },
+  { to: '/plugins', label: 'Plugins' },
+  { to: '/settings', label: 'Configurações' },
 ];
 </script>
 
@@ -39,6 +49,10 @@ const nav = [
             :class="jobs.connected ? 'bg-emerald-400' : 'bg-rose-500'"
           />
           {{ jobs.connected ? 'Conectado' : 'Desconectado' }}
+        </div>
+        <div v-if="auth.user" class="mt-4 px-3 text-xs text-slate-500">
+          <p class="truncate" :title="auth.user.email">{{ auth.user.email }}</p>
+          <button class="mt-1 text-sky-400 hover:underline" @click="logout">Sair</button>
         </div>
       </aside>
       <main class="flex-1 p-8">

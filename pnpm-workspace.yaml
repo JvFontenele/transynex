@@ -1,3 +1,6 @@
+# Mantém o store antigo (o default mudou no pnpm 11) para não exigir
+# reinstalação completa do node_modules.
+storeDir: /home/joao/.local/share/pnpm/store
 packages:
   - packages/*
   - plugins/*
@@ -5,9 +8,10 @@ packages:
 allowBuilds:
   '@prisma/client': true
   '@prisma/engines': true
+  argon2: true
   esbuild: true
   msgpackr-extract: true
   prisma: true
-  sharp: set this to true or false
+  sharp: true
   tesseract.js: true
   vue-demi: true
