@@ -5,8 +5,9 @@
 FROM node:22-slim
 
 # openssl: exigido pelos engines do Prisma em Debian slim.
+# poppler-utils: fornece o pdftoppm, usado para rasterizar páginas de PDF.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends openssl ca-certificates \
+  && apt-get install -y --no-install-recommends openssl ca-certificates poppler-utils \
   && rm -rf /var/lib/apt/lists/* \
   && npm install -g pnpm@11
 
