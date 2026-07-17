@@ -48,6 +48,8 @@ const metadata: ProviderMetadata = {
 const ISO_TO_TESSERACT: Record<string, string> = {
   en: 'eng',
   pt: 'por',
+  'pt-BR': 'por',
+  'pt-PT': 'por',
   ja: 'jpn',
   zh: 'chi_sim',
   ko: 'kor',

@@ -35,10 +35,34 @@ export class LibreTranslateProvider implements TranslationProvider {
   readonly metadata = metadata;
   private baseUrl = 'http://localhost:5000';
   private apiKey?: string;
+  private knownCodes: Set<string> | null = null;
 
   async configure(config: Record<string, unknown>): Promise<void> {
     if (typeof config.baseUrl === 'string') this.baseUrl = config.baseUrl.replace(/\/$/, '');
     if (typeof config.apiKey === 'string' && config.apiKey) this.apiKey = config.apiKey;
+    this.knownCodes = null;
+  }
+
+  // Variantes regionais (pt-BR, pt-PT, zh-Hant…) caem para o código base
+  // quando a instância não as lista em /languages. Se /languages falhar,
+  // passa o código adiante e deixa o /translate reportar o erro real.
+  private async resolveLang(code: string): Promise<string> {
+    if (code === 'auto' || !code.includes('-')) return code;
+    if (!this.knownCodes) {
+      try {
+        const res = await fetch(`${this.baseUrl}/languages`);
+        if (res.ok) {
+          const languages = (await res.json()) as LTLanguage[];
+          this.knownCodes = new Set(
+            languages.flatMap((l) => [l.code, ...l.targets]),
+          );
+        }
+      } catch {
+        return code;
+      }
+    }
+    if (!this.knownCodes || this.knownCodes.has(code)) return code;
+    return code.split('-')[0];
   }
 
   private async post<T>(path: string, body: Record<string, unknown>): Promise<T> {
@@ -59,8 +83,8 @@ export class LibreTranslateProvider implements TranslationProvider {
       detectedLanguage?: { language: string; confidence: number };
     }>('/translate', {
       q: input.text,
-      source: input.sourceLanguage === 'auto' ? 'auto' : input.sourceLanguage,
-      target: input.targetLanguage,
+      source: await this.resolveLang(input.sourceLanguage),
+      target: await this.resolveLang(input.targetLanguage),
       format: 'text',
     });
     return {
@@ -76,8 +100,8 @@ export class LibreTranslateProvider implements TranslationProvider {
     const { sourceLanguage, targetLanguage } = inputs[0];
     const body = await this.post<{ translatedText: string[] }>('/translate', {
       q: inputs.map((i) => i.text),
-      source: sourceLanguage === 'auto' ? 'auto' : sourceLanguage,
-      target: targetLanguage,
+      source: await this.resolveLang(sourceLanguage),
+      target: await this.resolveLang(targetLanguage),
       format: 'text',
     });
     return body.translatedText.map((translatedText) => ({ translatedText }));
