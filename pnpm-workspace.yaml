@@ -9,3 +9,4 @@ allowBuilds:
   msgpackr-extract: true
   prisma: true
   tesseract.js: true
+  vue-demi: true

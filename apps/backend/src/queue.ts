@@ -19,6 +19,20 @@ export interface PipelineJobData {
   translationProviderId: string;
 }
 
+// Quando não resta job pendente do projeto, define READY (ou ERROR se
+// algum falhou definitivamente). Sem isso o projeto fica PROCESSING para sempre.
+async function settleProjectStatus(ctx: AppContext, projectId: string): Promise<void> {
+  const pending = await ctx.prisma.job.count({
+    where: { projectId, status: { in: ['queued', 'active', 'retrying'] } },
+  });
+  if (pending > 0) return;
+  const failed = await ctx.prisma.job.count({ where: { projectId, status: 'failed' } });
+  await ctx.prisma.project.update({
+    where: { id: projectId },
+    data: { status: failed > 0 ? 'ERROR' : 'READY' },
+  });
+}
+
 function connection(redisUrl: string) {
   const url = new URL(redisUrl);
   return { host: url.hostname, port: Number(url.port || 6379) };
@@ -98,6 +112,7 @@ export function createWorker(ctx: AppContext, io: SocketServer): Worker<Pipeline
         data: { status: 'completed', progress: 100, finishedAt: new Date() },
       });
       io.emit('job:completed', { jobId, pageId, regions: ocrResult.regions.length });
+      await settleProjectStatus(ctx, job.data.projectId);
     },
     { connection: connection(ctx.redisUrl), concurrency: 2 },
   );
@@ -115,6 +130,7 @@ export function createWorker(ctx: AppContext, io: SocketServer): Worker<Pipeline
       },
     });
     io.emit('job:failed', { jobId, pageId, error: err.message });
+    await settleProjectStatus(ctx, job.data.projectId);
   });
 
   return worker;
