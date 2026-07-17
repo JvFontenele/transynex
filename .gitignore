@@ -5,3 +5,4 @@ storage/
 models/
 temp/
 .env
+.env.prod

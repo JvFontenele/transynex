@@ -1,0 +1,12 @@
+node_modules
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+storage
+apps/backend/storage
+apps/backend/models
+.git
+.env
+**/.env
+docs
+graphify-out

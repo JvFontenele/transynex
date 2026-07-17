@@ -1,0 +1,71 @@
+# Deploy em produção:
+#   cp .env.prod.example .env.prod   # e preencha os segredos
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: transynex
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env.prod}
+      POSTGRES_DB: transynex
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U transynex -d transynex']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+
+  libretranslate:
+    image: libretranslate/libretranslate
+    restart: unless-stopped
+    volumes:
+      - libretranslate-data:/home/libretranslate/.local
+
+  backend:
+    build:
+      context: .
+      dockerfile: apps/backend/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://transynex:${POSTGRES_PASSWORD}@postgres:5432/transynex
+      REDIS_URL: redis://redis:6379
+      LIBRETRANSLATE_URL: http://libretranslate:5000
+      TRANSYNEX_STORAGE_DIR: /data/storage
+      TRANSYNEX_MODELS_DIR: /data/models/tesseract
+      JWT_SECRET: ${JWT_SECRET:?defina JWT_SECRET no .env.prod}
+      MASTER_KEY: ${MASTER_KEY:?defina MASTER_KEY no .env.prod}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      OLLAMA_URL: ${OLLAMA_URL:-}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-}
+    volumes:
+      - backend-data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  frontend:
+    build:
+      context: .
+      dockerfile: apps/frontend/Dockerfile
+    restart: unless-stopped
+    ports:
+      - '80:80'
+    depends_on:
+      - backend
+
+volumes:
+  postgres-data:
+  redis-data:
+  libretranslate-data:
+  backend-data:
