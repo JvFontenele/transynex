@@ -33,6 +33,12 @@ const metadata: ProviderMetadata = {
         description: 'Diretório de cache dos traineddata',
         default: './models/tesseract',
       },
+      minConfidence: {
+        type: 'number',
+        description:
+          'Confiança mínima (0–1) para aceitar uma linha; abaixo disso a detecção é descartada como ruído',
+        default: 0.55,
+      },
     },
   },
 };
@@ -62,6 +68,7 @@ export class TesseractOCRProvider implements OCRProvider {
   readonly metadata = metadata;
   private languages = ['eng'];
   private cachePath = './models/tesseract';
+  private minConfidence = 0.55;
   private worker: Worker | null = null;
 
   constructor(private storage: StorageProvider) {}
@@ -72,6 +79,9 @@ export class TesseractOCRProvider implements OCRProvider {
     }
     if (typeof config.cachePath === 'string') {
       this.cachePath = config.cachePath;
+    }
+    if (typeof config.minConfidence === 'number') {
+      this.minConfidence = Math.min(Math.max(config.minConfidence, 0), 1);
     }
     await this.worker?.terminate();
     this.worker = null;
@@ -103,6 +113,11 @@ export class TesseractOCRProvider implements OCRProvider {
         for (const line of paragraph.lines) {
           const text = line.text.trim();
           if (!text) continue;
+          // Em áreas de textura/arte o Tesseract "alucina" linhas de símbolos
+          // soltos com confiança baixa; filtrar aqui evita dezenas de regiões
+          // fantasmas por página.
+          if (line.confidence / 100 < this.minConfidence) continue;
+          if (!/[\p{L}\p{N}]/u.test(text)) continue;
           regions.push({
             id: `${input.pageId}-r${order}`,
             boundingBox: {
