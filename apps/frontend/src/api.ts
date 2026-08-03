@@ -1,13 +1,31 @@
 // Cliente da API REST do backend (/api/v1). Tipos espelham o schema Prisma.
 
+/** IMAGE = tradução desenhada na página; DOCUMENT = tradução em texto corrido. */
+export type ProjectKind = 'IMAGE' | 'DOCUMENT';
+
 export interface Project {
   id: string;
   name: string;
+  kind: ProjectKind;
   sourceLanguage: string;
   targetLanguage: string;
   status: 'DRAFT' | 'PROCESSING' | 'READY' | 'ERROR';
   createdAt: string;
   _count?: { pages: number; jobs: number };
+}
+
+/** Parágrafo de um projeto DOCUMENT. */
+export interface DocumentBlock {
+  id: string;
+  projectId: string;
+  sourceFileId: string;
+  /** Página do arquivo original (1-based). */
+  pageNumber: number;
+  order: number;
+  sourceText: string;
+  translatedText: string | null;
+  /** 'text-layer' (camada de texto do PDF) ou 'ocr' (scan). */
+  origin: string;
 }
 
 export interface OcrRegion {
@@ -172,7 +190,12 @@ export const api = {
 
   listProjects: () => request<Project[]>('/projects'),
   getProject: (id: string) => request<Project>(`/projects/${id}`),
-  createProject: (data: { name: string; sourceLanguage: string; targetLanguage: string }) =>
+  createProject: (data: {
+    name: string;
+    kind: ProjectKind;
+    sourceLanguage: string;
+    targetLanguage: string;
+  }) =>
     request<Project>('/projects', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -225,6 +248,9 @@ export const api = {
   reanalyzeRegion: (regionId: string) =>
     request<OcrRegion>(`/regions/${regionId}/reanalyze`, { method: 'POST' }),
 
+  // Parágrafos de um projeto DOCUMENT, na ordem de leitura
+  listBlocks: (projectId: string) => request<DocumentBlock[]>(`/projects/${projectId}/blocks`),
+
   run: (
     projectId: string,
     body: {
@@ -232,6 +258,8 @@ export const api = {
       translationProviderId?: string;
       // false = descarta também as regiões manuais e refaz tudo do zero
       preserveManual?: boolean;
+      // DOCUMENT: true = refaz também os parágrafos já traduzidos
+      retranslate?: boolean;
     },
   ) =>
     request<{ jobIds: string[] }>(`/projects/${projectId}/run`, {

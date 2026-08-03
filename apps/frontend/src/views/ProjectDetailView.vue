@@ -3,10 +3,11 @@ import { computed, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
 import { api, type Page } from '../api';
-import { formatBytes, languageName, timeAgo } from '../lib/labels';
+import { formatBytes, languageName, PROJECT_KIND_LABELS, timeAgo } from '../lib/labels';
 import StatusBadge from '../components/StatusBadge.vue';
 import ProgressBar from '../components/ProgressBar.vue';
 import EmptyState from '../components/EmptyState.vue';
+import DocumentTextPanel from '../components/DocumentTextPanel.vue';
 import { useJobsStore } from '../stores/jobs';
 
 const route = useRoute();
@@ -18,11 +19,23 @@ const project = useQuery({
   queryKey: ['project', projectId],
   queryFn: () => api.getProject(projectId.value),
 });
+// Projeto de documento: o conteúdo são parágrafos, não páginas renderizadas.
+const isDocument = computed(() => project.data.value?.kind === 'DOCUMENT');
 const pages = useQuery({
   queryKey: ['pages', projectId],
   queryFn: () => api.listPages(projectId.value),
 });
+const blocks = useQuery({
+  queryKey: ['blocks', projectId],
+  queryFn: () => api.listBlocks(projectId.value),
+  enabled: isDocument,
+});
 const providers = useQuery({ queryKey: ['providers'], queryFn: api.listProviders });
+
+// "Tem o que traduzir?" — páginas no fluxo de imagem, parágrafos no de documento.
+const hasContent = computed(() =>
+  isDocument.value ? (blocks.data.value?.length ?? 0) > 0 : (pages.data.value?.length ?? 0) > 0,
+);
 
 // --- Upload (input + arrastar e soltar) -----------------------------------
 
@@ -66,11 +79,14 @@ watch(
 const runningJobIds = ref<string[]>([]);
 // Preservar regiões criadas/editadas à mão ao re-rodar o pipeline
 const preserveManual = ref(true);
+// Documento: por padrão só traduz o que falta; marcar refaz tudo.
+const retranslate = ref(false);
 const run = useMutation({
   mutationFn: () =>
     api.run(projectId.value, {
       translationProviderId: translator.value,
       preserveManual: preserveManual.value,
+      retranslate: retranslate.value,
     }),
   onSuccess: (data) => (runningJobIds.value = data.jobIds),
 });
@@ -85,6 +101,7 @@ jobsStore.$subscribe(() => {
   if (completed > seenCompleted) {
     seenCompleted = completed;
     queryClient.invalidateQueries({ queryKey: ['pages', projectId] });
+    queryClient.invalidateQueries({ queryKey: ['blocks', projectId] });
     queryClient.invalidateQueries({ queryKey: ['project', projectId] });
   }
   const done = runningJobIds.value.filter(
@@ -181,6 +198,16 @@ const saveRegion = useMutation({
       <div class="mt-1 flex flex-wrap items-center gap-3">
         <h2 class="text-2xl font-semibold">{{ project.data.value.name }}</h2>
         <StatusBadge :status="project.data.value.status" />
+        <span
+          class="rounded-full bg-slate-500/15 px-2 py-0.5 text-[11px] text-slate-400"
+          :title="
+            isDocument
+              ? 'Tradução em texto corrido a partir do texto do arquivo'
+              : 'Tradução desenhada de volta na página'
+          "
+        >
+          {{ PROJECT_KIND_LABELS[project.data.value.kind] ?? project.data.value.kind }}
+        </span>
         <span class="text-sm text-slate-500">
           {{ languageName(project.data.value.sourceLanguage) }} →
           {{ languageName(project.data.value.targetLanguage) }}
@@ -202,43 +229,70 @@ const saveRegion = useMutation({
         </option>
       </select>
       <label
+        v-if="!isDocument"
         class="flex cursor-pointer items-center gap-1.5 text-xs text-slate-400"
         title="Regiões que você criou ou editou no editor são mantidas; só as detecções automáticas são refeitas. Desmarque para refazer tudo do zero."
       >
         <input v-model="preserveManual" type="checkbox" class="accent-sky-500" />
         Manter minhas marcações
       </label>
+      <label
+        v-else
+        class="flex cursor-pointer items-center gap-1.5 text-xs text-slate-400"
+        title="Por padrão só os parágrafos ainda sem tradução são enviados ao provider. Marque para descartar as traduções atuais e refazer o documento inteiro."
+      >
+        <input v-model="retranslate" type="checkbox" class="accent-sky-500" />
+        Refazer traduções existentes
+      </label>
       <button
-        :disabled="run.isPending.value || running.length > 0 || !pages.data.value?.length"
+        :disabled="run.isPending.value || running.length > 0 || !hasContent"
         class="rounded-md bg-sky-600 px-4 py-2 text-sm font-medium hover:bg-sky-500 disabled:opacity-50"
-        :title="!pages.data.value?.length ? 'Envie arquivos primeiro' : ''"
+        :title="
+          hasContent
+            ? ''
+            : isDocument
+              ? 'Envie um PDF e aguarde a extração do texto'
+              : 'Envie arquivos primeiro'
+        "
         @click="run.mutate()"
       >
-        {{ running.length > 0 ? 'Processando…' : 'Traduzir tudo' }}
+        {{
+          running.length > 0 ? 'Processando…' : isDocument ? 'Traduzir documento' : 'Traduzir tudo'
+        }}
       </button>
       <p v-if="run.error.value" class="text-xs text-rose-400">{{ run.error.value.message }}</p>
 
       <div class="ml-auto flex flex-wrap items-center gap-2">
-        <span class="text-sm text-slate-400">Exportar</span>
-        <select
-          v-model="exportFormat"
-          class="rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm"
-        >
-          <option value="pdf">PDF</option>
-          <option value="cbz">CBZ</option>
-          <option value="zip">ZIP (imagens)</option>
-          <option value="txt">TXT (só texto)</option>
-          <option value="markdown">Markdown</option>
-        </select>
-        <button
-          :disabled="doExport.isPending.value || exporting !== null || !pages.data.value?.length"
-          class="rounded-md border border-slate-700 px-3 py-1.5 text-sm hover:border-sky-600 disabled:opacity-50"
-          @click="doExport.mutate()"
-        >
-          {{ exporting ? 'Exportando…' : 'Exportar' }}
-        </button>
+        <template v-if="!isDocument">
+          <span class="text-sm text-slate-400">Exportar</span>
+          <select
+            v-model="exportFormat"
+            class="rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm"
+          >
+            <option value="pdf">PDF</option>
+            <option value="cbz">CBZ</option>
+            <option value="zip">ZIP (imagens)</option>
+            <option value="txt">TXT (só texto)</option>
+            <option value="markdown">Markdown</option>
+          </select>
+          <button
+            :disabled="doExport.isPending.value || exporting !== null || !pages.data.value?.length"
+            class="rounded-md border border-slate-700 px-3 py-1.5 text-sm hover:border-sky-600 disabled:opacity-50"
+            @click="doExport.mutate()"
+          >
+            {{ exporting ? 'Exportando…' : 'Exportar' }}
+          </button>
+        </template>
         <RouterLink
-          v-if="pages.data.value?.length"
+          v-if="isDocument && hasContent"
+          :to="{ name: 'document-reader', params: { id: projectId } }"
+          class="rounded-md border border-slate-700 px-3 py-1.5 text-sm text-slate-200 hover:border-sky-600"
+          title="Ler a tradução em texto corrido (com opção de ver o original ao lado)"
+        >
+          Ler tradução
+        </RouterLink>
+        <RouterLink
+          v-else-if="!isDocument && pages.data.value?.length"
           :to="{ name: 'reader', params: { id: projectId } }"
           class="rounded-md border border-slate-700 px-3 py-1.5 text-sm text-slate-200 hover:border-sky-600"
           :title="`Leitura contínua — ${translatedCount} de ${pages.data.value.length} página(s) traduzida(s)`"
@@ -251,7 +305,8 @@ const saveRegion = useMutation({
     <!-- Progresso do pipeline -->
     <div v-if="running.length > 0" class="mb-6 rounded-lg border border-slate-800 bg-slate-900/60 p-4">
       <div class="mb-1.5 flex justify-between text-xs text-slate-400">
-        <span>Traduzindo {{ running.length }} página(s)…</span>
+        <span v-if="isDocument">Traduzindo {{ running.length }} arquivo(s)…</span>
+        <span v-else>Traduzindo {{ running.length }} página(s)…</span>
         <span>{{ overallProgress }}%</span>
       </div>
       <ProgressBar :progress="overallProgress" />
@@ -282,7 +337,11 @@ const saveRegion = useMutation({
       <input
         ref="fileInput"
         type="file"
-        accept="image/png,image/jpeg,image/webp,image/tiff,application/pdf,.cbz,.zip"
+        :accept="
+          isDocument
+            ? 'application/pdf,image/png,image/jpeg,image/webp,image/tiff'
+            : 'image/png,image/jpeg,image/webp,image/tiff,application/pdf,.cbz,.zip'
+        "
         multiple
         class="hidden"
         @change="onFileChange"
@@ -293,15 +352,26 @@ const saveRegion = useMutation({
           escolha no computador
         </button>
       </p>
-      <p class="mt-1 text-xs text-slate-600">PNG, JPEG, WEBP, TIFF, PDF, CBZ ou ZIP</p>
+      <p v-if="isDocument" class="mt-1 text-xs text-slate-600">
+        PDF (com texto ou escaneado). Se não houver camada de texto, o OCR entra automaticamente.
+      </p>
+      <p v-else class="mt-1 text-xs text-slate-600">PNG, JPEG, WEBP, TIFF, PDF, CBZ ou ZIP</p>
       <p v-if="upload.isPending.value" class="mt-2 text-xs text-sky-400">Enviando…</p>
       <p v-if="upload.error.value" class="mt-2 text-xs text-rose-400">
         {{ upload.error.value.message }}
       </p>
     </div>
 
+    <!-- Documento: parágrafos extraídos, sem grade de páginas -->
+    <DocumentTextPanel
+      v-if="isDocument"
+      :project-id="projectId"
+      :blocks="blocks.data.value ?? []"
+      :loading="blocks.isLoading.value"
+    />
+
     <!-- Grade de páginas -->
-    <template v-if="pages.data.value?.length">
+    <template v-else-if="pages.data.value?.length">
       <h3 class="mb-3 text-lg font-medium">Páginas</h3>
       <div class="mb-8 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
         <div

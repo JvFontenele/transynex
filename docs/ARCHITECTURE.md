@@ -30,6 +30,8 @@ Regra de ouro: **o Core nunca faz `import` de um pacote de provider específico.
 
 Exceção deliberada: a **extração de páginas** (PDF/CBZ/ZIP → imagens de página) é um serviço do Core, não um provider. Ela roda antes do pipeline, tem pouquíssima variação de implementação (pdf.js/sharp/unzip) e transformá-la em provider adicionaria abstração sem benefício. Se um dia surgir necessidade real (ex: extração via FrankYomik), promove-se a `ExtractionProvider` sem quebrar nada, pois ela já roda como job isolado.
 
+Mesma decisão para a **extração de texto de documento** (`apps/backend/src/document.ts`): também é serviço do Core. Ver §11.
+
 ---
 
 ## 2. Provider base
@@ -546,3 +548,53 @@ Nenhum provider exigiu método adicional na interface — sinal de que o contrat
 1. Revisar este documento e ajustar interfaces antes de gerar código.
 2. Decidir estrutura de monorepo (`apps/backend`, `apps/frontend`, `packages/core-contracts`, `plugins/*`).
 3. Escolher entre gerar o esqueleto do repo ou implementar primeiro o pipeline mínimo offline (`LocalStorageProvider` + `TesseractOCRProvider` + `OllamaTranslationProvider`/`LibreTranslateProvider` + orquestrador via CLI), antes de tocar no frontend.
+
+## 11. Projetos de documento (texto corrido)
+
+Além do fluxo de imagem (OCR → tradução → render sobre a página), existe um
+segundo fluxo para quem só quer **ler a tradução**: `Project.kind = DOCUMENT`.
+O tipo é escolhido na criação e define o pipeline e a tela do projeto.
+
+```
+DOCUMENT:  upload ──► job extract-doc ──┬─ PDF com camada de texto: pdftotext -bbox-layout
+                                        └─ senão: pdftoppm + OCRProvider
+                                                    │
+                                        parágrafos (DocumentBlock)
+                                                    │
+                          job translate-doc ──► TranslationProvider.translateBatch
+                                                    │
+                                        leitor de texto corrido / bilíngue
+```
+
+Decisões desse fluxo:
+
+1. **Parágrafo é a unidade**, não a região com `boundingBox`: o texto não volta
+   para a imagem, então `DocumentBlock` só guarda `pageNumber` (marcador de leitura),
+   `order`, `sourceText`, `translatedText` e `origin` (`text-layer` | `ocr`).
+   `OcrRegion` continua exclusiva do fluxo de imagem — o caminho de OCR do
+   documento **não** persiste regiões, para não inventar estado de render.
+2. **`pdftotext -bbox-layout`, não o modo texto.** O modo texto do poppler não
+   marca fim de parágrafo (só quebra de página): parágrafos consecutivos saem
+   colados. O `-bbox-layout` devolve a análise de layout (páginas → blocos →
+   linhas → palavras com coordenadas), e o corte de parágrafo sai da geometria:
+   fronteira de bloco, entrelinha maior que ~¾ de linha, ou recuo de primeira
+   linha. Hifenização de fim de linha é desfeita ao juntar as linhas.
+3. **Um único agrupador de linhas** (`paragraphsFromLines`) serve os dois
+   caminhos: as linhas do poppler e as linhas do OCR entram no mesmo formato
+   (`TextLine`), então a heurística de parágrafo existe em um lugar só.
+4. **Detecção de scan**: se a maioria das páginas tem menos de 40 letras na
+   camada de texto, o PDF é tratado como escaneado e cai para rasterizar + OCR.
+   O limiar evita que marca d'água ou cabeçalho carimbado passe por documento.
+5. **Tradução em lotes por arquivo** (≤15 parágrafos ou ≤4000 caracteres por
+   chamada), com `translateBatch` — o provider decide como agrupar o contexto.
+   Por padrão só os parágrafos sem tradução são enviados, então um retry retoma
+   de onde parou; `retranslate: true` descarta as traduções e refaz tudo.
+
+Endpoints acrescentados: `POST /projects` aceita `kind`; `GET
+/projects/:id/blocks` devolve os parágrafos na ordem de leitura; `POST
+/projects/:id/run` aceita `retranslate` e, em projeto DOCUMENT, enfileira
+`translate-doc` por arquivo em vez de um job por página.
+
+Ainda **não** coberto neste fluxo: exportação (o `export-basic` monta a partir de
+`Page`, não de `DocumentBlock`) e edição de parágrafo pela UI — o leitor é
+somente-leitura, com modo bilíngue para revisão.

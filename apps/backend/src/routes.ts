@@ -50,19 +50,23 @@ export function registerRoutes(
 
   // --- Projects ---------------------------------------------------------
 
-  app.post<{ Body: { name: string; sourceLanguage: string; targetLanguage: string } }>(
-    '/api/v1/projects',
-    async (req, reply) => {
-      const { name, sourceLanguage, targetLanguage } = req.body;
-      if (!name || !sourceLanguage || !targetLanguage) {
-        return reply.code(400).send({ error: 'name, sourceLanguage e targetLanguage são obrigatórios' });
-      }
-      const project = await ctx.prisma.project.create({
-        data: { name, sourceLanguage, targetLanguage, ownerId: actorOf(req).sub },
-      });
-      return reply.code(201).send(project);
-    },
-  );
+  app.post<{
+    Body: { name: string; sourceLanguage: string; targetLanguage: string; kind?: string };
+  }>('/api/v1/projects', async (req, reply) => {
+    const { name, sourceLanguage, targetLanguage } = req.body;
+    if (!name || !sourceLanguage || !targetLanguage) {
+      return reply.code(400).send({ error: 'name, sourceLanguage e targetLanguage são obrigatórios' });
+    }
+    // Default IMAGE mantém o comportamento de clientes antigos que não mandam kind.
+    const kind = req.body.kind ?? 'IMAGE';
+    if (kind !== 'IMAGE' && kind !== 'DOCUMENT') {
+      return reply.code(400).send({ error: `kind inválido: ${kind}` });
+    }
+    const project = await ctx.prisma.project.create({
+      data: { name, kind, sourceLanguage, targetLanguage, ownerId: actorOf(req).sub },
+    });
+    return reply.code(201).send(project);
+  });
 
   app.get('/api/v1/projects', async (req) =>
     ctx.prisma.project.findMany({
@@ -119,16 +123,43 @@ export function registerRoutes(
     await ctx.storage.save(fileRef, buffer);
     await ctx.prisma.sourceFile.update({ where: { id: sourceFile.id }, data: { fileRef } });
 
-    if (isImage) {
-      const pageCount = await ctx.prisma.page.count({ where: { projectId: project.id } });
-      const page = await ctx.prisma.page.create({
-        data: {
+    const createPage = () =>
+      ctx.prisma.page.count({ where: { projectId: project.id } }).then((order) =>
+        ctx.prisma.page.create({
+          data: {
+            projectId: project.id,
+            sourceFileId: sourceFile.id,
+            order,
+            sourceImageRef: fileRef,
+          },
+        }),
+      );
+
+    // Projeto de documento: todo upload passa por um job de extração de
+    // parágrafos (camada de texto do PDF ou, se for scan, OCR). Imagens soltas
+    // também ganham uma Page, porque o fallback de OCR lê a partir dela.
+    if (project.kind === 'DOCUMENT') {
+      if (isImage) await createPage();
+      const job = await ctx.prisma.job.create({
+        data: { projectId: project.id, type: 'extraction', status: 'queued' },
+      });
+      await queue.add(
+        'extract-doc',
+        {
+          kind: 'extract-doc',
+          jobId: job.id,
           projectId: project.id,
           sourceFileId: sourceFile.id,
-          order: pageCount,
-          sourceImageRef: fileRef,
+          sourceLanguage: project.sourceLanguage,
+          ocrProviderId: await defaultProviderFor('ocr', 'tesseract-ocr'),
         },
-      });
+        { attempts: 2 },
+      );
+      return reply.code(202).send({ sourceFileId: sourceFile.id, jobId: job.id });
+    }
+
+    if (isImage) {
+      const page = await createPage();
       await ctx.prisma.sourceFile.update({
         where: { id: sourceFile.id },
         data: { status: 'extracted' },
@@ -397,6 +428,20 @@ export function registerRoutes(
     return withImageUrls(updated);
   });
 
+  // --- Documento (texto corrido) -------------------------------------------
+
+  // Parágrafos do projeto na ordem de leitura: alimenta o leitor de texto
+  // corrido e o modo bilíngue.
+  app.get<{ Params: { id: string } }>('/api/v1/projects/:id/blocks', async (req, reply) => {
+    if (!(await scopedProject(actorOf(req), req.params.id))) {
+      return reply.code(404).send({ error: 'Projeto não encontrado' });
+    }
+    return ctx.prisma.documentBlock.findMany({
+      where: { projectId: req.params.id },
+      orderBy: { order: 'asc' },
+    });
+  });
+
   // --- Pipeline run -------------------------------------------------------
 
   app.post<{
@@ -407,6 +452,8 @@ export function registerRoutes(
           translationProviderId?: string;
           renderProviderId?: string;
           preserveManual?: boolean;
+          /** Só DOCUMENT: refaz também os parágrafos já traduzidos. */
+          retranslate?: boolean;
         }
       | undefined;
   }>('/api/v1/projects/:id/run', async (req, reply) => {
@@ -418,6 +465,46 @@ export function registerRoutes(
     const translationProviderId =
       req.body?.translationProviderId ??
       (await defaultProviderFor('translation', 'libretranslate'));
+
+    // Documento: um job de tradução por arquivo, sobre os parágrafos extraídos.
+    if (project.kind === 'DOCUMENT') {
+      const files = await ctx.prisma.sourceFile.findMany({
+        where: { projectId: project.id, documentBlocks: { some: {} } },
+        select: { id: true },
+        orderBy: { createdAt: 'asc' },
+      });
+      if (files.length === 0) {
+        return reply
+          .code(400)
+          .send({ error: 'Nenhum texto extraído ainda — envie um arquivo e aguarde a extração' });
+      }
+      await ctx.prisma.project.update({
+        where: { id: project.id },
+        data: { status: 'PROCESSING' },
+      });
+      const jobIds: string[] = [];
+      for (const file of files) {
+        const job = await ctx.prisma.job.create({
+          data: { projectId: project.id, type: 'translation', status: 'queued' },
+        });
+        await queue.add(
+          'translate-doc',
+          {
+            kind: 'translate-doc',
+            jobId: job.id,
+            projectId: project.id,
+            sourceFileId: file.id,
+            sourceLanguage: project.sourceLanguage,
+            targetLanguage: project.targetLanguage,
+            translationProviderId,
+            retranslate: req.body?.retranslate ?? false,
+          },
+          { attempts: 3, backoff: { type: 'exponential', delay: 2000 } },
+        );
+        jobIds.push(job.id);
+      }
+      return reply.code(202).send({ jobIds });
+    }
 
     const pages = await ctx.prisma.page.findMany({
       where: { projectId: project.id },

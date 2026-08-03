@@ -30,22 +30,31 @@ enum ProjectStatus {
   ERROR
 }
 
+/// IMAGE: OCR + tradução desenhada de volta na página (mangá/quadrinho).
+/// DOCUMENT: texto extraído do PDF e traduzido como texto corrido.
+enum ProjectKind {
+  IMAGE
+  DOCUMENT
+}
+
 model Project {
   id             String        @id @default(cuid())
   ownerId        String?
   owner          User?         @relation(fields: [ownerId], references: [id])
   name           String
+  kind           ProjectKind   @default(IMAGE)
   sourceLanguage String
   targetLanguage String
   status         ProjectStatus @default(DRAFT)
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
-  sourceFiles SourceFile[]
-  pages       Page[]
-  pipelines   Pipeline[]
-  jobs        Job[]
-  exports     ExportArtifact[]
+  sourceFiles    SourceFile[]
+  pages          Page[]
+  pipelines      Pipeline[]
+  jobs           Job[]
+  exports        ExportArtifact[]
+  documentBlocks DocumentBlock[]
 }
 
 model SourceFile {
@@ -59,7 +68,8 @@ model SourceFile {
   status    String   @default("pending") // pending | extracting | extracted | error
   createdAt DateTime @default(now())
 
-  pages Page[]
+  pages          Page[]
+  documentBlocks DocumentBlock[]
 }
 
 model Page {
@@ -92,6 +102,27 @@ model OcrRegion {
   manual         Boolean @default(false)
 
   @@index([pageId])
+}
+
+/// Parágrafo de um projeto DOCUMENT: unidade de tradução e de leitura em
+/// texto corrido. Não tem boundingBox — o texto não volta para a imagem.
+model DocumentBlock {
+  id             String     @id @default(cuid())
+  projectId      String
+  project        Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sourceFileId   String
+  sourceFile     SourceFile @relation(fields: [sourceFileId], references: [id], onDelete: Cascade)
+  /// Página do arquivo original (1-based), usada como marcador na leitura
+  pageNumber     Int
+  /// Ordem de leitura dentro do projeto
+  order          Int
+  sourceText     String
+  translatedText String?
+  /// De onde saiu o texto: "text-layer" (pdftotext) ou "ocr" (PDF escaneado)
+  origin         String     @default("text-layer")
+
+  @@index([projectId, order])
+  @@index([sourceFileId])
 }
 
 model Pipeline {

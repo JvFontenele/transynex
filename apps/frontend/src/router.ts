@@ -25,6 +25,13 @@ export const router = createRouter({
       meta: { immersive: true },
     },
     {
+      // Leitura de projeto DOCUMENT: tradução em texto corrido (± bilíngue)
+      path: '/projects/:id/text',
+      name: 'document-reader',
+      component: () => import('./views/DocumentReaderView.vue'),
+      meta: { immersive: true },
+    },
+    {
       path: '/projects/:id/pages/:pageId',
       name: 'page-editor',
       component: () => import('./views/PageEditorView.vue'),

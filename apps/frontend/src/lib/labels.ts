@@ -52,6 +52,11 @@ export const PROJECT_STATUS_LABELS: Record<string, string> = {
   ERROR: 'Erro',
 };
 
+export const PROJECT_KIND_LABELS: Record<string, string> = {
+  IMAGE: 'Imagem/Mangá',
+  DOCUMENT: 'Documento',
+};
+
 export const PROVIDER_TYPE_LABELS: Record<string, string> = {
   ocr: 'OCR',
   translation: 'Tradução',

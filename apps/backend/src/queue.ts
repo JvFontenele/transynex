@@ -12,6 +12,12 @@ import type {
 } from '@transynex/core-contracts';
 import type { AppContext } from './context.js';
 import { extractPages } from './extraction.js';
+import {
+  chunkForTranslation,
+  extractPdfParagraphs,
+  paragraphsFromLines,
+  type DocumentPage,
+} from './document.js';
 
 const QUEUE_NAME = 'transynex';
 
@@ -61,7 +67,36 @@ export interface ExportJobData {
   exportProviderId: string;
 }
 
-export type QueueJobData = PageJobData | ExtractJobData | ExportJobData;
+/** Projeto DOCUMENT: extrai parágrafos do arquivo (camada de texto ou OCR). */
+export interface ExtractDocJobData {
+  kind: 'extract-doc';
+  jobId: string;
+  projectId: string;
+  sourceFileId: string;
+  /** Usado só no fallback de OCR (PDF escaneado). */
+  sourceLanguage: string;
+  ocrProviderId: string;
+}
+
+/** Projeto DOCUMENT: traduz os parágrafos de um arquivo em lotes. */
+export interface TranslateDocJobData {
+  kind: 'translate-doc';
+  jobId: string;
+  projectId: string;
+  sourceFileId: string;
+  sourceLanguage: string;
+  targetLanguage: string;
+  translationProviderId: string;
+  /** true = descarta as traduções existentes e refaz tudo. */
+  retranslate?: boolean;
+}
+
+export type QueueJobData =
+  | PageJobData
+  | ExtractJobData
+  | ExportJobData
+  | ExtractDocJobData
+  | TranslateDocJobData;
 
 function connection(redisUrl: string) {
   const url = new URL(redisUrl);
@@ -247,6 +282,149 @@ export function createWorker(ctx: AppContext, io: SocketServer): Worker<QueueJob
     await complete(jobId, projectId, { sourceFileId, pages: extracted.length });
   };
 
+  // --- Fluxo DOCUMENT (texto corrido) -------------------------------------
+
+  // Fallback para PDF sem camada de texto (scan) e para imagens/CBZ enviados
+  // num projeto de documento: rasteriza (se ainda não houver páginas), roda OCR
+  // e agrupa as linhas em parágrafos. As linhas NÃO viram OcrRegion — no fluxo
+  // de documento não há render sobre a imagem, e persistir regiões faria a tela
+  // de imagem mostrar um estado que não existe.
+  const ocrDocumentPages = async (
+    data: ExtractDocJobData,
+    sourceFile: { id: string; projectId: string; mimeType: string },
+    buffer: Buffer,
+  ): Promise<DocumentPage[]> => {
+    let pages = await ctx.prisma.page.findMany({
+      where: { sourceFileId: sourceFile.id },
+      orderBy: { order: 'asc' },
+    });
+
+    if (pages.length === 0) {
+      const extracted = await extractPages(buffer, sourceFile.mimeType);
+      const baseOrder = await ctx.prisma.page.count({ where: { projectId: sourceFile.projectId } });
+      for (const [i, page] of extracted.entries()) {
+        const pageRef = `projects/${sourceFile.projectId}/pages/${sourceFile.id}-${i}${page.ext}`;
+        await ctx.storage.save(pageRef, page.buffer);
+        await ctx.prisma.page.create({
+          data: {
+            projectId: sourceFile.projectId,
+            sourceFileId: sourceFile.id,
+            order: baseOrder + i,
+            sourceImageRef: pageRef,
+          },
+        });
+      }
+      pages = await ctx.prisma.page.findMany({
+        where: { sourceFileId: sourceFile.id },
+        orderBy: { order: 'asc' },
+      });
+    }
+
+    if (pages.length === 0) return [];
+
+    const ocr = ctx.registry.get<OCRProvider>('ocr', data.ocrProviderId);
+    const out: DocumentPage[] = [];
+    for (const [i, page] of pages.entries()) {
+      const result = await ocr.recognize({
+        pageId: page.id,
+        imageRef: page.sourceImageRef,
+        languageHint: [data.sourceLanguage],
+      });
+      out.push({
+        pageNumber: i + 1,
+        paragraphs: paragraphsFromLines(
+          result.regions.map((r) => ({ text: r.text, boundingBox: r.boundingBox })),
+        ),
+      });
+      // OCR é a parte lenta: reporta progresso até 80%, o resto é banco.
+      await setProgress(data.jobId, Math.round(((i + 1) / pages.length) * 80));
+    }
+    return out;
+  };
+
+  const processExtractDoc = async (data: ExtractDocJobData) => {
+    const { jobId, projectId, sourceFileId } = data;
+    await setProgress(jobId, 0);
+
+    const sourceFile = await ctx.prisma.sourceFile.findUniqueOrThrow({
+      where: { id: sourceFileId },
+    });
+    // Idempotente: um retry (ou re-extração) refaz os parágrafos do arquivo.
+    await ctx.prisma.documentBlock.deleteMany({ where: { sourceFileId } });
+
+    const buffer = await ctx.storage.read(sourceFile.fileRef);
+    let origin = 'text-layer';
+    let pages =
+      sourceFile.mimeType === 'application/pdf' ? await extractPdfParagraphs(buffer) : null;
+    if (!pages) {
+      origin = 'ocr';
+      pages = await ocrDocumentPages(data, sourceFile, buffer);
+    }
+    await setProgress(jobId, 90);
+
+    const baseOrder = await ctx.prisma.documentBlock.count({ where: { projectId } });
+    const paragraphs = pages.flatMap((p) =>
+      p.paragraphs.map((sourceText) => ({ pageNumber: p.pageNumber, sourceText })),
+    );
+    await ctx.prisma.documentBlock.createMany({
+      data: paragraphs.map((p, i) => ({
+        projectId,
+        sourceFileId,
+        pageNumber: p.pageNumber,
+        order: baseOrder + i,
+        sourceText: p.sourceText,
+        origin,
+      })),
+    });
+    await ctx.prisma.sourceFile.update({
+      where: { id: sourceFileId },
+      data: { status: 'extracted' },
+    });
+
+    await complete(jobId, projectId, { sourceFileId, blocks: paragraphs.length, origin });
+  };
+
+  const processTranslateDoc = async (data: TranslateDocJobData) => {
+    const { jobId, projectId, sourceFileId, sourceLanguage, targetLanguage } = data;
+    await setProgress(jobId, 0);
+
+    const translator = ctx.registry.get<TranslationProvider>(
+      'translation',
+      data.translationProviderId,
+    );
+    if (data.retranslate) {
+      await ctx.prisma.documentBlock.updateMany({
+        where: { sourceFileId },
+        data: { translatedText: null },
+      });
+    }
+
+    // Só o que falta: um retry retoma de onde parou em vez de retraduzir tudo.
+    const blocks = await ctx.prisma.documentBlock.findMany({
+      where: { sourceFileId, translatedText: null },
+      orderBy: { order: 'asc' },
+    });
+
+    let done = 0;
+    for (const chunk of chunkForTranslation(blocks)) {
+      const results = await translator.translateBatch(
+        chunk.map((b) => ({ text: b.sourceText, sourceLanguage, targetLanguage })),
+      );
+      await ctx.prisma.$transaction(
+        chunk.map((b, i) =>
+          ctx.prisma.documentBlock.update({
+            where: { id: b.id },
+            data: { translatedText: results[i]?.translatedText ?? null },
+          }),
+        ),
+      );
+      done += chunk.length;
+      await setProgress(jobId, Math.min(99, Math.round((done / blocks.length) * 100)));
+    }
+
+    await complete(jobId, projectId, { sourceFileId, translated: done });
+  };
+
   const processExport = async (data: ExportJobData) => {
     const { jobId, projectId, format } = data;
     await setProgress(jobId, 0);
@@ -286,6 +464,10 @@ export function createWorker(ctx: AppContext, io: SocketServer): Worker<QueueJob
           return processExtract(job.data);
         case 'export':
           return processExport(job.data);
+        case 'extract-doc':
+          return processExtractDoc(job.data);
+        case 'translate-doc':
+          return processTranslateDoc(job.data);
       }
     },
     { connection: connection(ctx.redisUrl), concurrency: 2 },
