@@ -35,6 +35,16 @@ services:
     volumes:
       - libretranslate-data:/home/libretranslate/.local
 
+  # OCR PaddleOCR (plugin paddle-ocr). Modelos baixados ficam no volume.
+  paddle-ocr:
+    build: services/paddle-ocr
+    restart: unless-stopped
+    environment:
+      # Idiomas (códigos do PaddleOCR) baixados/carregados na subida; ~1–2 GB de RAM cada
+      PADDLE_OCR_PRELOAD: ${PADDLE_OCR_PRELOAD:-en,japan}
+    volumes:
+      - paddle-models:/root/.paddlex
+
   backend:
     build:
       context: .
@@ -44,6 +54,7 @@ services:
       DATABASE_URL: postgresql://transynex:${SERVICE_PASSWORD_POSTGRES}@postgres:5432/transynex
       REDIS_URL: redis://redis:6379
       LIBRETRANSLATE_URL: http://libretranslate:5000
+      PADDLE_OCR_URL: http://paddle-ocr:8866
       TRANSYNEX_STORAGE_DIR: /data/storage
       TRANSYNEX_MODELS_DIR: /data/models/tesseract
       JWT_SECRET: ${SERVICE_PASSWORD_64_JWT}
@@ -71,6 +82,7 @@ services:
       - backend
 
 volumes:
+  paddle-models:
   postgres-data:
   redis-data:
   libretranslate-data:
