@@ -1,6 +1,8 @@
-# 3.3.x quebra na CPU (oneDNN: ConvertPirAttribute2RuntimeAttribute not support)
+# Versões fixadas = as testadas. paddlepaddle 3.3.x quebra na CPU
+# (oneDNN: ConvertPirAttribute2RuntimeAttribute not support).
 paddlepaddle==3.2.0
-paddleocr>=3.0,<4
-fastapi>=0.115
-uvicorn>=0.30
-python-multipart>=0.0.9
+paddleocr==3.7.0
+paddlex==3.7.2
+fastapi==0.142.2
+uvicorn==0.54.0
+python-multipart==0.0.32
