@@ -1,6 +1,17 @@
 import { createRouter, createWebHistory } from 'vue-router';
 import { useAuthStore } from './stores/auth';
 
+declare module 'vue-router' {
+  interface RouteMeta {
+    public?: boolean;
+    immersive?: boolean;
+    adminOnly?: boolean;
+    title?: string;
+    // Editor precisa de largura total (sem max-w do layout)
+    wide?: boolean;
+  }
+}
+
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
@@ -10,12 +21,13 @@ export const router = createRouter({
       component: () => import('./views/LoginView.vue'),
       meta: { public: true },
     },
-    { path: '/', name: 'dashboard', component: () => import('./views/DashboardView.vue') },
-    { path: '/projects', name: 'projects', component: () => import('./views/ProjectsView.vue') },
+    { path: '/', name: 'dashboard', component: () => import('./views/DashboardView.vue'), meta: { title: 'Início' } },
+    { path: '/projects', name: 'projects', component: () => import('./views/ProjectsView.vue'), meta: { title: 'Projetos' } },
     {
       path: '/projects/:id',
       name: 'project-detail',
       component: () => import('./views/ProjectDetailView.vue'),
+      meta: { title: 'Projeto' },
     },
     {
       // Modo leitura imersivo (sem sidebar): páginas traduzidas empilhadas
@@ -32,24 +44,38 @@ export const router = createRouter({
       meta: { immersive: true },
     },
     {
+      // Leitura de EPUB: o livro original com o texto trocado pela tradução
+      path: '/projects/:id/book',
+      name: 'book-reader',
+      component: () => import('./views/EpubReaderView.vue'),
+      meta: { immersive: true },
+    },
+    {
       path: '/projects/:id/pages/:pageId',
       name: 'page-editor',
       component: () => import('./views/PageEditorView.vue'),
+      meta: { title: 'Editor de página', wide: true },
     },
-    { path: '/queue', name: 'queue', component: () => import('./views/QueueView.vue') },
-    { path: '/plugins', name: 'plugins', component: () => import('./views/PluginsView.vue') },
+    {
+      path: '/account',
+      name: 'account',
+      component: () => import('./views/AccountView.vue'),
+      meta: { title: 'Minha conta' },
+    },
+    { path: '/queue', name: 'queue', component: () => import('./views/QueueView.vue'), meta: { title: 'Fila' } },
+    { path: '/plugins', name: 'plugins', component: () => import('./views/PluginsView.vue'), meta: { title: 'Plugins' } },
     {
       // Configura providers e chaves de API — só ADMIN
       path: '/settings',
       name: 'settings',
       component: () => import('./views/SettingsView.vue'),
-      meta: { adminOnly: true },
+      meta: { adminOnly: true, title: 'Configurações' },
     },
     {
       path: '/users',
       name: 'users',
       component: () => import('./views/UsersView.vue'),
-      meta: { adminOnly: true },
+      meta: { adminOnly: true, title: 'Usuários' },
     },
   ],
 });

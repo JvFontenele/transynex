@@ -18,6 +18,8 @@ import {
   paragraphsFromLines,
   type DocumentPage,
 } from './document.js';
+import { buildTranslatedEpub, extractEpubParagraphs } from './epub.js';
+import { enqueueRun, EPUB_MIME, type RunOptions } from './pipeline.js';
 
 const QUEUE_NAME = 'transynex';
 
@@ -57,6 +59,8 @@ export interface ExtractJobData {
   jobId: string;
   projectId: string;
   sourceFileId: string;
+  /** Envio rápido: enfileira a tradução ao terminar a extração. */
+  autoRun?: RunOptions;
 }
 
 export interface ExportJobData {
@@ -76,6 +80,7 @@ export interface ExtractDocJobData {
   /** Usado só no fallback de OCR (PDF escaneado). */
   sourceLanguage: string;
   ocrProviderId: string;
+  autoRun?: RunOptions;
 }
 
 /** Projeto DOCUMENT: traduz os parágrafos de um arquivo em lotes. */
@@ -121,7 +126,19 @@ async function settleProjectStatus(ctx: AppContext, projectId: string): Promise<
   });
 }
 
-export function createWorker(ctx: AppContext, io: SocketServer): Worker<QueueJobData> {
+export function createWorker(
+  ctx: AppContext,
+  io: SocketServer,
+  queue: Queue<QueueJobData>,
+): Worker<QueueJobData> {
+  // Antes do complete(): os jobs novos já contam como pendentes e o projeto
+  // não "pisca" READY entre a extração e a tradução.
+  const autoRun = async (projectId: string, opts?: RunOptions) => {
+    if (!opts) return;
+    const project = await ctx.prisma.project.findUniqueOrThrow({ where: { id: projectId } });
+    await enqueueRun(ctx, queue, project, opts);
+  };
+
   const setProgress = async (jobId: string, progress: number, extra: object = {}) => {
     await ctx.prisma.job.update({
       where: { id: jobId },
@@ -246,6 +263,8 @@ export function createWorker(ctx: AppContext, io: SocketServer): Worker<QueueJob
         data: { renderedImageRef: rendered.imageRef },
       });
     }
+    // Página re-traduzida precisa ser revisada de novo
+    await ctx.prisma.page.update({ where: { id: pageId }, data: { reviewedAt: null } });
 
     await complete(jobId, data.projectId, { pageId, regions: allRegions.length });
   };
@@ -279,6 +298,7 @@ export function createWorker(ctx: AppContext, io: SocketServer): Worker<QueueJob
       data: { status: 'extracted' },
     });
 
+    await autoRun(projectId, data.autoRun);
     await complete(jobId, projectId, { sourceFileId, pages: extracted.length });
   };
 
@@ -353,9 +373,13 @@ export function createWorker(ctx: AppContext, io: SocketServer): Worker<QueueJob
     await ctx.prisma.documentBlock.deleteMany({ where: { sourceFileId } });
 
     const buffer = await ctx.storage.read(sourceFile.fileRef);
-    let origin = 'text-layer';
+    let origin = sourceFile.mimeType === EPUB_MIME ? 'epub' : 'text-layer';
     let pages =
-      sourceFile.mimeType === 'application/pdf' ? await extractPdfParagraphs(buffer) : null;
+      sourceFile.mimeType === EPUB_MIME
+        ? extractEpubParagraphs(buffer)
+        : sourceFile.mimeType === 'application/pdf'
+          ? await extractPdfParagraphs(buffer)
+          : null;
     if (!pages) {
       origin = 'ocr';
       pages = await ocrDocumentPages(data, sourceFile, buffer);
@@ -364,7 +388,11 @@ export function createWorker(ctx: AppContext, io: SocketServer): Worker<QueueJob
 
     const baseOrder = await ctx.prisma.documentBlock.count({ where: { projectId } });
     const paragraphs = pages.flatMap((p) =>
-      p.paragraphs.map((sourceText) => ({ pageNumber: p.pageNumber, sourceText })),
+      p.paragraphs.map((sourceText, i) => ({
+        pageNumber: p.pageNumber,
+        sourceText,
+        locator: p.locators?.[i] ?? null,
+      })),
     );
     await ctx.prisma.documentBlock.createMany({
       data: paragraphs.map((p, i) => ({
@@ -373,6 +401,7 @@ export function createWorker(ctx: AppContext, io: SocketServer): Worker<QueueJob
         pageNumber: p.pageNumber,
         order: baseOrder + i,
         sourceText: p.sourceText,
+        locator: p.locator,
         origin,
       })),
     });
@@ -381,6 +410,7 @@ export function createWorker(ctx: AppContext, io: SocketServer): Worker<QueueJob
       data: { status: 'extracted' },
     });
 
+    await autoRun(projectId, data.autoRun);
     await complete(jobId, projectId, { sourceFileId, blocks: paragraphs.length, origin });
   };
 
@@ -395,7 +425,7 @@ export function createWorker(ctx: AppContext, io: SocketServer): Worker<QueueJob
     if (data.retranslate) {
       await ctx.prisma.documentBlock.updateMany({
         where: { sourceFileId },
-        data: { translatedText: null },
+        data: { translatedText: null, reviewedAt: null },
       });
     }
 
@@ -429,6 +459,9 @@ export function createWorker(ctx: AppContext, io: SocketServer): Worker<QueueJob
     const { jobId, projectId, format } = data;
     await setProgress(jobId, 0);
 
+    const project = await ctx.prisma.project.findUniqueOrThrow({ where: { id: projectId } });
+    if (project.kind === 'DOCUMENT') return processExportDocument(data);
+
     const exporter = ctx.registry.get<ExportProvider>('export', data.exportProviderId);
     const pages = await ctx.prisma.page.findMany({
       where: { projectId },
@@ -451,6 +484,56 @@ export function createWorker(ctx: AppContext, io: SocketServer): Worker<QueueJob
       data: { projectId, format, fileRef: result.fileRef, sizeBytes: result.sizeBytes },
     });
 
+    await complete(jobId, projectId, { artifactId: artifact.id, format });
+  };
+
+  // Documento: TXT/Markdown dos parágrafos (tradução, ou original onde falta)
+  // e EPUB = livro original reescrito com as traduções.
+  const processExportDocument = async (data: ExportJobData) => {
+    const { jobId, projectId, format } = data;
+    const blocks = await ctx.prisma.documentBlock.findMany({
+      where: { projectId },
+      orderBy: { order: 'asc' },
+    });
+    const text = (b: (typeof blocks)[number]) => b.translatedText ?? b.sourceText;
+
+    let buffer: Buffer;
+    if (format === 'epub') {
+      // ponytail: projeto com vários EPUBs exporta só o primeiro; um zip por livro se precisar.
+      const file = await ctx.prisma.sourceFile.findFirst({
+        where: { projectId, mimeType: EPUB_MIME },
+        orderBy: { createdAt: 'asc' },
+      });
+      if (!file) throw new Error('Projeto sem EPUB de origem para exportar');
+      const translations = new Map(
+        blocks
+          .filter((b) => b.sourceFileId === file.id && b.locator && b.translatedText)
+          .map((b) => [b.locator!, b.translatedText!]),
+      );
+      buffer = buildTranslatedEpub(await ctx.storage.read(file.fileRef), translations);
+    } else if (format === 'markdown') {
+      buffer = Buffer.from(
+        blocks
+          .map((b, i) =>
+            i === 0 || blocks[i - 1]!.pageNumber !== b.pageNumber
+              ? `## ${b.origin === 'epub' ? 'Capítulo' : 'Página'} ${b.pageNumber}\n\n${text(b)}`
+              : text(b),
+          )
+          .join('\n\n'),
+        'utf8',
+      );
+    } else if (format === 'txt') {
+      buffer = Buffer.from(blocks.map(text).join('\n\n'), 'utf8');
+    } else {
+      throw new Error(`Formato não suportado para documento: ${format}`);
+    }
+
+    const ext = format === 'markdown' ? 'md' : format;
+    const fileRef = `projects/${projectId}/exports/export-${Date.now()}.${ext}`;
+    await ctx.storage.save(fileRef, buffer);
+    const artifact = await ctx.prisma.exportArtifact.create({
+      data: { projectId, format, fileRef, sizeBytes: buffer.length },
+    });
     await complete(jobId, projectId, { artifactId: artifact.id, format });
   };
 

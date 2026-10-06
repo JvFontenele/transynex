@@ -26,6 +26,7 @@ function envConfigs(): Record<string, Record<string, unknown>> {
   return {
     'storage-local': { baseDir: process.env.TRANSYNEX_STORAGE_DIR ?? './storage' },
     'tesseract-ocr': { cachePath: process.env.TRANSYNEX_MODELS_DIR ?? './models/tesseract' },
+    'paddle-ocr': { url: process.env.PADDLE_OCR_URL },
     'ollama-translation': {
       baseUrl: process.env.OLLAMA_URL,
       model: process.env.OLLAMA_MODEL,

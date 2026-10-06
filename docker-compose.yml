@@ -26,7 +26,20 @@ services:
     volumes:
       - libretranslate-data:/home/libretranslate/.local
 
+  # OCR PaddleOCR (plugin paddle-ocr). Primeira chamada de cada idioma baixa
+  # o modelo (~100 MB); o volume evita baixar de novo.
+  paddle-ocr:
+    build: services/paddle-ocr
+    environment:
+      # Idiomas (códigos do PaddleOCR) baixados/carregados na subida
+      PADDLE_OCR_PRELOAD: ${PADDLE_OCR_PRELOAD:-en,japan}
+    ports:
+      - '8866:8866'
+    volumes:
+      - paddle-models:/root/.paddlex
+
 volumes:
+  paddle-models:
   postgres-data:
   redis-data:
   libretranslate-data:

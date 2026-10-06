@@ -11,6 +11,8 @@ export interface DocumentPage {
   /** 1-based, como o usuário conta as páginas do PDF. */
   pageNumber: number;
   paragraphs: string[];
+  /** EPUB: posição de cada parágrafo no XHTML ("capítulo:bloco"), para reescrever/ler. */
+  locators?: string[];
 }
 
 /**

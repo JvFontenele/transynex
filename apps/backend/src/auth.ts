@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import jwt from '@fastify/jwt';
 import cookie from '@fastify/cookie';
+import { createHash, randomBytes } from 'node:crypto';
 import argon2 from 'argon2';
 import type { AppContext } from './context.js';
 
@@ -25,6 +26,9 @@ export interface Actor {
 }
 
 export const actorOf = (req: { user: unknown }): Actor => req.user as Actor;
+
+const API_KEY_PREFIX = 'tsx_';
+const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 
 export async function registerAuth(app: FastifyInstance, ctx: AppContext): Promise<AuthHelpers> {
   const secret = process.env.JWT_SECRET;
@@ -113,14 +117,28 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext): Promi
   // não enviam header Authorization).
   app.addHook('onRequest', async (req, reply) => {
     const url = req.url;
-    if (!url.startsWith('/api/')) return;
+    if (!url.startsWith('/api/') || req.method === 'OPTIONS') return; // preflight CORS
     if (url.startsWith('/api/v1/auth/')) return;
     if (url.startsWith('/api/v1/files/')) return;
     if (/^\/api\/v1\/exports\/[^/]+\/download/.test(url)) return;
-    try {
-      await req.jwtVerify();
-    } catch {
-      return reply.code(401).send({ error: 'Não autenticado' });
+    const bearer = req.headers.authorization?.replace(/^Bearer /, '') ?? '';
+    if (bearer.startsWith(API_KEY_PREFIX)) {
+      // Chave de API pessoal (clientes externos): vale como o próprio usuário.
+      const key = await ctx.prisma.apiKey.findUnique({
+        where: { hash: sha256(bearer) },
+        include: { user: true },
+      });
+      if (!key) return reply.code(401).send({ error: 'Chave de API inválida' });
+      req.user = { sub: key.user.id, email: key.user.email, role: key.user.role } satisfies Actor;
+      void ctx.prisma.apiKey
+        .update({ where: { id: key.id }, data: { lastUsedAt: new Date() } })
+        .catch(() => {});
+    } else {
+      try {
+        await req.jwtVerify();
+      } catch {
+        return reply.code(401).send({ error: 'Não autenticado' });
+      }
     }
     // VIEWER é somente-leitura em toda a API; exceção: /api/v1/me/*
     // (trocar a própria senha é permitido a qualquer papel).
@@ -157,6 +175,34 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext): Promi
       return reply.code(204).send();
     },
   );
+
+  // Chaves de API do próprio usuário. O segredo só aparece na criação.
+  app.get('/api/v1/me/api-keys', async (req) =>
+    ctx.prisma.apiKey.findMany({
+      where: { userId: actorOf(req).sub },
+      select: { id: true, name: true, prefix: true, lastUsedAt: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+    }),
+  );
+
+  app.post<{ Body: { name?: string } }>('/api/v1/me/api-keys', async (req, reply) => {
+    const name = req.body?.name?.trim();
+    if (!name) return reply.code(400).send({ error: 'name é obrigatório' });
+    const key = API_KEY_PREFIX + randomBytes(24).toString('base64url');
+    const row = await ctx.prisma.apiKey.create({
+      data: { userId: actorOf(req).sub, name, prefix: key.slice(0, 10), hash: sha256(key) },
+      select: { id: true, name: true, prefix: true, lastUsedAt: true, createdAt: true },
+    });
+    return reply.code(201).send({ ...row, key });
+  });
+
+  app.delete<{ Params: { id: string } }>('/api/v1/me/api-keys/:id', async (req, reply) => {
+    const { count } = await ctx.prisma.apiKey.deleteMany({
+      where: { id: req.params.id, userId: actorOf(req).sub },
+    });
+    if (count === 0) return reply.code(404).send({ error: 'Chave não encontrada' });
+    return reply.code(204).send();
+  });
 
   return {
     fileUrlFor: (ref) =>

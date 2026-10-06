@@ -2,7 +2,16 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
-import { api, type BoundingBox, type OcrRegion } from '../api';
+import { ArrowLeftIcon, EyeIcon, PlusIcon, ScanTextIcon, Trash2Icon, WandSparklesIcon } from '@lucide/vue';
+import { api, type BoundingBox, type OcrRegion } from '@/api';
+import { cn } from '@/lib/utils';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Field, FieldGroup, FieldLabel } from '@/components/ui/field';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Spinner } from '@/components/ui/spinner';
+import { Textarea } from '@/components/ui/textarea';
 
 const route = useRoute();
 const projectId = computed(() => route.params.id as string);
@@ -275,175 +284,190 @@ const handleStyle: Record<string, string> = {
 </script>
 
 <template>
-  <div v-if="page.data.value">
-    <!-- Header fixo com as ações do editor -->
+  <div v-if="page.data.value" class="flex flex-col gap-6">
+    <!-- Header fixo com as ações do editor (abaixo do header do layout, h-12) -->
     <div
-      class="sticky top-14.25 z-20 -mx-4 -mt-4 mb-6 border-b border-slate-800 bg-slate-950/90 px-4 py-3 backdrop-blur sm:-mx-8 sm:-mt-8 sm:px-8 lg:top-0"
+      class="sticky top-12 z-20 -mx-4 -mt-4 border-b bg-background/80 px-4 py-3 backdrop-blur sm:-mx-6 sm:-mt-6 sm:px-6 lg:-mx-8 lg:-mt-8 lg:px-8"
     >
       <div class="flex flex-wrap items-center gap-3">
-        <RouterLink
-          :to="{ name: 'project-detail', params: { id: projectId } }"
-          class="text-sm text-sky-400 hover:underline"
-        >
-          ← Voltar ao projeto
-        </RouterLink>
-        <h2 class="text-lg font-semibold">Página {{ page.data.value.order + 1 }}</h2>
+        <Button variant="ghost" size="sm" as-child>
+          <RouterLink :to="{ name: 'project-detail', params: { id: projectId } }">
+            <ArrowLeftIcon data-icon="inline-start" />
+            Voltar ao projeto
+          </RouterLink>
+        </Button>
+        <h1 class="text-lg font-semibold tracking-tight">Página {{ page.data.value.order + 1 }}</h1>
         <div class="ml-auto flex flex-wrap items-center gap-2">
-          <button
-            class="rounded-md px-3 py-1.5 text-sm"
-            :class="
-              mode === 'draw'
-                ? 'bg-sky-600 hover:bg-sky-500'
-                : 'border border-slate-700 hover:border-sky-600'
-            "
+          <Button
+            size="sm"
+            :variant="mode === 'draw' ? 'default' : 'outline'"
             @click="mode = mode === 'draw' ? 'select' : 'draw'"
           >
-            {{ mode === 'draw' ? 'Desenhando… (Esc cancela)' : '+ Nova região' }}
-          </button>
-          <button
+            <PlusIcon v-if="mode !== 'draw'" data-icon="inline-start" />
+            {{ mode === 'draw' ? 'Desenhando… (Esc cancela)' : 'Nova região' }}
+          </Button>
+          <Button
             v-if="regions.length"
+            size="sm"
+            variant="outline"
             :disabled="renderPage.isPending.value"
-            class="rounded-md border border-slate-700 px-3 py-1.5 text-sm hover:border-sky-600 disabled:opacity-50"
             @click="renderPage.mutate()"
           >
+            <Spinner v-if="renderPage.isPending.value" data-icon="inline-start" />
+            <WandSparklesIcon v-else data-icon="inline-start" />
             {{ renderPage.isPending.value ? 'Renderizando…' : 'Renderizar tradução' }}
-          </button>
-          <button
+          </Button>
+          <Button
             v-if="page.data.value.renderedImageRef"
-            class="rounded-md border border-slate-700 px-3 py-1.5 text-sm hover:border-sky-600"
+            size="sm"
+            variant="outline"
             @click="showRendered = !showRendered"
           >
+            <EyeIcon data-icon="inline-start" />
             {{ showRendered ? 'Ver original' : 'Ver traduzida' }}
-          </button>
+          </Button>
         </div>
       </div>
     </div>
 
-    <div class="flex flex-col gap-6 lg:flex-row">
-    <!-- Coluna principal: imagem + overlay -->
-    <div class="min-w-0 flex-1">
-      <div
-        ref="imgWrapper"
-        class="relative inline-block max-w-full select-none touch-none"
-        :class="mode === 'draw' ? 'cursor-crosshair' : ''"
-        @pointerdown="onWrapperPointerDown"
-        @pointermove="onPointerMove"
-        @pointerup="onPointerUp"
-        @pointercancel="onPointerUp"
-      >
-        <img
-          :src="imageSrc"
-          class="block max-w-full rounded-lg border border-slate-800"
-          draggable="false"
-          @load="onImgLoad"
-        />
-
-        <!-- Regiões -->
+    <div class="flex flex-col gap-6 lg:flex-row lg:items-start">
+      <!-- Coluna principal: imagem + overlay -->
+      <div class="min-w-0 flex-1">
         <div
-          v-for="r in regions"
-          :key="r.id"
-          class="absolute border-2"
-          :class="[
-            r.id === selectedId
-              ? 'z-10 border-sky-400 bg-sky-400/15'
-              : 'border-rose-500/70 bg-rose-500/5 hover:bg-rose-500/15',
-            mode === 'draw' ? 'pointer-events-none' : 'cursor-move',
-          ]"
-          :style="boxStyle(displayBox(r))"
-          @pointerdown="onRegionPointerDown($event, r)"
+          ref="imgWrapper"
+          :class="cn('relative inline-block max-w-full touch-none select-none', mode === 'draw' && 'cursor-crosshair')"
+          @pointerdown="onWrapperPointerDown"
+          @pointermove="onPointerMove"
+          @pointerup="onPointerUp"
+          @pointercancel="onPointerUp"
         >
-          <template v-if="r.id === selectedId">
-            <div
-              v-for="h in HANDLES"
-              :key="h"
-              class="absolute h-2.5 w-2.5 rounded-sm border border-slate-900 bg-sky-400"
-              :class="handleStyle[h]"
-              @pointerdown="onHandlePointerDown($event, r, h)"
-            />
-          </template>
-        </div>
-
-        <!-- Retângulo sendo desenhado -->
-        <div
-          v-if="draft && draft.regionId === null"
-          class="pointer-events-none absolute border-2 border-dashed border-sky-400 bg-sky-400/10"
-          :style="boxStyle(draft.box)"
-        />
-      </div>
-    </div>
-
-    <!-- Painel lateral -->
-    <aside class="w-full shrink-0 lg:w-80">
-      <div class="rounded-lg border border-slate-800 bg-slate-900/60 p-4 lg:sticky lg:top-20">
-        <template v-if="selected">
-          <h3 class="mb-3 text-sm font-medium text-slate-300">Região selecionada</h3>
-          <label class="mb-1 block text-xs text-slate-500">Texto original</label>
-          <textarea
-            v-model="formSource"
-            rows="3"
-            class="mb-3 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm"
+          <img
+            :src="imageSrc"
+            class="block max-w-full rounded-lg border"
+            draggable="false"
+            @load="onImgLoad"
           />
-          <label class="mb-1 block text-xs text-slate-500">Tradução</label>
-          <textarea
-            v-model="formTranslated"
-            rows="3"
-            class="mb-3 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm"
-          />
-          <div class="flex items-center gap-2">
-            <button
-              :disabled="updateRegion.isPending.value"
-              class="rounded-md bg-sky-600 px-3 py-1.5 text-sm font-medium hover:bg-sky-500 disabled:opacity-50"
-              @click="saveTexts"
-            >
-              Salvar
-            </button>
-            <button
-              :disabled="deleteRegion.isPending.value"
-              class="rounded-md border border-rose-700 px-3 py-1.5 text-sm text-rose-400 hover:bg-rose-950 disabled:opacity-50"
-              @click="deleteRegion.mutate(selected.id)"
-            >
-              Excluir
-            </button>
-          </div>
-          <button
-            :disabled="reanalyzeRegion.isPending.value"
-            class="mt-2 w-full rounded-md border border-slate-700 px-3 py-1.5 text-sm hover:border-sky-600 disabled:opacity-50"
-            @click="reanalyzeRegion.mutate(selected.id)"
+
+          <!-- Regiões -->
+          <div
+            v-for="r in regions"
+            :key="r.id"
+            :class="
+              cn(
+                'absolute border-2',
+                r.id === selectedId
+                  ? 'z-10 border-info bg-info/15 ring-2 ring-info/30'
+                  : 'border-destructive/70 bg-destructive/5 hover:bg-destructive/15',
+                mode === 'draw' ? 'pointer-events-none' : 'cursor-move',
+              )
+            "
+            :style="boxStyle(displayBox(r))"
+            @pointerdown="onRegionPointerDown($event, r)"
           >
-            {{
-              reanalyzeRegion.isPending.value
-                ? 'Analisando…'
-                : 'Reanalisar região (OCR + tradução)'
-            }}
-          </button>
-          <p v-if="reanalyzeRegion.error.value" class="mt-2 text-xs text-rose-400">
-            {{ reanalyzeRegion.error.value.message }}
-          </p>
-          <p class="mt-3 text-xs text-slate-600">
-            Confiança: {{ (selected.confidence * 100).toFixed(0) }}% · Arraste a caixa para mover,
-            cantos para redimensionar. Delete exclui.
-          </p>
-        </template>
-        <template v-else>
-          <h3 class="mb-2 text-sm font-medium text-slate-300">Nenhuma região selecionada</h3>
-          <p class="text-xs text-slate-500">
-            Clique numa caixa sobre a imagem para editar o texto, ou use "+ Nova região" para
-            desenhar uma nova.
-          </p>
-          <p v-if="!regions.length" class="mt-2 text-xs text-slate-600">
-            Esta página ainda não tem regiões de OCR.
-          </p>
-        </template>
-        <p v-if="updateRegion.error.value" class="mt-3 text-xs text-rose-400">
-          {{ updateRegion.error.value.message }}
-        </p>
-        <p v-if="renderPage.error.value" class="mt-3 text-xs text-rose-400">
-          {{ renderPage.error.value.message }}
-        </p>
+            <template v-if="r.id === selectedId">
+              <div
+                v-for="h in HANDLES"
+                :key="h"
+                :class="cn('absolute size-2.5 rounded-sm border border-background bg-info', handleStyle[h])"
+                @pointerdown="onHandlePointerDown($event, r, h)"
+              />
+            </template>
+          </div>
+
+          <!-- Retângulo sendo desenhado -->
+          <div
+            v-if="draft && draft.regionId === null"
+            class="pointer-events-none absolute border-2 border-dashed border-info bg-info/10"
+            :style="boxStyle(draft.box)"
+          />
+        </div>
       </div>
-    </aside>
+
+      <!-- Painel lateral (abaixo da imagem no mobile) -->
+      <aside class="w-full shrink-0 lg:sticky lg:top-32 lg:w-80">
+        <Card>
+          <template v-if="selected">
+            <CardHeader>
+              <CardTitle>Região selecionada</CardTitle>
+              <CardDescription>
+                Confiança: {{ (selected.confidence * 100).toFixed(0) }}% · Arraste a caixa para
+                mover, cantos para redimensionar. Delete exclui.
+              </CardDescription>
+            </CardHeader>
+            <CardContent class="flex flex-col gap-4">
+              <FieldGroup class="gap-4">
+                <Field>
+                  <FieldLabel for="region-source">Texto original</FieldLabel>
+                  <Textarea id="region-source" v-model="formSource" rows="3" />
+                </Field>
+                <Field>
+                  <FieldLabel for="region-translated">Tradução</FieldLabel>
+                  <Textarea id="region-translated" v-model="formTranslated" rows="3" />
+                </Field>
+              </FieldGroup>
+              <div class="flex items-center gap-2">
+                <Button :disabled="updateRegion.isPending.value" @click="saveTexts">
+                  <Spinner v-if="updateRegion.isPending.value" data-icon="inline-start" />
+                  Salvar
+                </Button>
+                <Button
+                  variant="destructive"
+                  :disabled="deleteRegion.isPending.value"
+                  @click="deleteRegion.mutate(selected.id)"
+                >
+                  <Trash2Icon data-icon="inline-start" />
+                  Excluir
+                </Button>
+              </div>
+              <Button
+                variant="outline"
+                class="w-full"
+                :disabled="reanalyzeRegion.isPending.value"
+                @click="reanalyzeRegion.mutate(selected.id)"
+              >
+                <Spinner v-if="reanalyzeRegion.isPending.value" data-icon="inline-start" />
+                <ScanTextIcon v-else data-icon="inline-start" />
+                {{
+                  reanalyzeRegion.isPending.value
+                    ? 'Analisando…'
+                    : 'Reanalisar região (OCR + tradução)'
+                }}
+              </Button>
+              <Alert v-if="reanalyzeRegion.error.value" variant="destructive">
+                <AlertDescription>{{ reanalyzeRegion.error.value.message }}</AlertDescription>
+              </Alert>
+            </CardContent>
+          </template>
+          <CardHeader v-else>
+            <CardTitle>Nenhuma região selecionada</CardTitle>
+            <CardDescription>
+              Clique numa caixa sobre a imagem para editar o texto, ou use "Nova região" para
+              desenhar uma nova.
+            </CardDescription>
+            <CardDescription v-if="!regions.length">
+              Esta página ainda não tem regiões de OCR.
+            </CardDescription>
+          </CardHeader>
+          <CardContent
+            v-if="updateRegion.error.value || renderPage.error.value"
+            class="flex flex-col gap-2"
+          >
+            <Alert v-if="updateRegion.error.value" variant="destructive">
+              <AlertDescription>{{ updateRegion.error.value.message }}</AlertDescription>
+            </Alert>
+            <Alert v-if="renderPage.error.value" variant="destructive">
+              <AlertDescription>{{ renderPage.error.value.message }}</AlertDescription>
+            </Alert>
+          </CardContent>
+        </Card>
+      </aside>
     </div>
   </div>
-  <p v-else-if="page.isError.value" class="text-rose-400">{{ page.error.value?.message }}</p>
-  <p v-else class="text-slate-500">Carregando…</p>
+  <Alert v-else-if="page.isError.value" variant="destructive">
+    <AlertDescription>{{ page.error.value?.message }}</AlertDescription>
+  </Alert>
+  <div v-else class="flex flex-col gap-6 lg:flex-row">
+    <Skeleton class="aspect-[3/4] w-full max-w-2xl rounded-lg" />
+    <Skeleton class="h-48 w-full rounded-xl lg:w-80" />
+  </div>
 </template>

@@ -21,6 +21,7 @@ COPY apps/frontend/package.json apps/frontend/
 COPY packages/core/package.json packages/core/
 COPY packages/core-contracts/package.json packages/core-contracts/
 COPY plugins/export-basic/package.json plugins/export-basic/
+COPY plugins/ocr-paddle/package.json plugins/ocr-paddle/
 COPY plugins/ocr-tesseract/package.json plugins/ocr-tesseract/
 COPY plugins/render-canvas/package.json plugins/render-canvas/
 COPY plugins/storage-local/package.json plugins/storage-local/

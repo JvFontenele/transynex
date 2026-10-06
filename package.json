@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc -b",
-    "cli": "tsx apps/cli/src/main.ts"
+    "cli": "tsx apps/cli/src/main.ts",
+    "dev": "pnpm --parallel --filter @transynex/backend --filter @transynex/frontend run dev"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

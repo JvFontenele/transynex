@@ -2,6 +2,7 @@
   "plugins": [
     "@transynex/storage-local",
     "@transynex/ocr-tesseract",
+    "@transynex/ocr-paddle",
     "@transynex/translation-ollama",
     "@transynex/translation-libretranslate"
   ],

@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { useAuthStore } from '../stores/auth';
+import { useAuthStore } from '@/stores/auth';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Field, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field';
+import { Input } from '@/components/ui/input';
+import { Spinner } from '@/components/ui/spinner';
 
 const auth = useAuthStore();
 const route = useRoute();
@@ -27,45 +32,48 @@ async function submit() {
 </script>
 
 <template>
-  <div class="flex min-h-screen items-center justify-center">
-    <div class="w-full max-w-sm">
-      <div class="mb-6 text-center">
-        <h1 class="text-3xl font-bold tracking-tight">
-          Trans<span class="text-sky-400">ynex</span>
-        </h1>
-        <p class="mt-1 text-sm text-slate-500">The Open Translation Orchestrator</p>
-      </div>
-
-      <form
-        class="rounded-lg border border-slate-800 bg-slate-900/60 p-6"
-        @submit.prevent="submit"
-      >
-        <label class="mb-1 block text-xs text-slate-500">E-mail</label>
-        <input
-          v-model="email"
-          type="email"
-          required
-          autofocus
-          autocomplete="username"
-          class="mb-3 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm outline-none focus:border-sky-500"
-        />
-        <label class="mb-1 block text-xs text-slate-500">Senha</label>
-        <input
-          v-model="password"
-          type="password"
-          required
-          autocomplete="current-password"
-          class="mb-4 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm outline-none focus:border-sky-500"
-        />
-
-        <button
-          :disabled="pending"
-          class="w-full rounded-md bg-sky-600 px-4 py-2 text-sm font-medium hover:bg-sky-500 disabled:opacity-50"
-        >
-          {{ pending ? 'Entrando…' : 'Entrar' }}
-        </button>
-        <p v-if="error" class="mt-3 text-sm text-rose-400">{{ error }}</p>
-      </form>
-    </div>
+  <div class="flex min-h-svh items-center justify-center bg-muted p-4">
+    <Card class="w-full max-w-sm">
+      <CardHeader class="text-center">
+        <CardTitle class="text-2xl tracking-tight">
+          Trans<span class="text-primary">ynex</span>
+        </CardTitle>
+        <CardDescription>The Open Translation Orchestrator</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form @submit.prevent="submit">
+          <FieldGroup>
+            <Field>
+              <FieldLabel for="login-email">E-mail</FieldLabel>
+              <Input
+                id="login-email"
+                v-model="email"
+                type="email"
+                required
+                autofocus
+                autocomplete="username"
+              />
+            </Field>
+            <Field>
+              <FieldLabel for="login-password">Senha</FieldLabel>
+              <Input
+                id="login-password"
+                v-model="password"
+                type="password"
+                required
+                autocomplete="current-password"
+              />
+            </Field>
+            <Field>
+              <Button type="submit" :disabled="pending">
+                <Spinner v-if="pending" data-icon="inline-start" />
+                {{ pending ? 'Entrando…' : 'Entrar' }}
+              </Button>
+              <FieldError v-if="error">{{ error }}</FieldError>
+            </Field>
+          </FieldGroup>
+        </form>
+      </CardContent>
+    </Card>
   </div>
 </template>

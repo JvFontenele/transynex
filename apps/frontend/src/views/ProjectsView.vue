@@ -1,12 +1,28 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
-import { api, type ProjectKind } from '../api';
-import { useAuthStore } from '../stores/auth';
-import { languageName, PROJECT_KIND_LABELS, timeAgo } from '../lib/labels';
-import StatusBadge from '../components/StatusBadge.vue';
-import EmptyState from '../components/EmptyState.vue';
-import LanguageSelect from '../components/LanguageSelect.vue';
+import { PlusIcon, Trash2Icon } from '@lucide/vue';
+import { api, type ProjectKind } from '@/api';
+import { useAuthStore } from '@/stores/auth';
+import { languageName, PROJECT_KIND_LABELS, timeAgo } from '@/lib/labels';
+import StatusBadge from '@/components/StatusBadge.vue';
+import EmptyState from '@/components/EmptyState.vue';
+import LanguageSelect from '@/components/LanguageSelect.vue';
+import { Button } from '@/components/ui/button';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+  CardAction,
+} from '@/components/ui/card';
+import { Field, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field';
+import { Input } from '@/components/ui/input';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Spinner } from '@/components/ui/spinner';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 
 // VIEWER é somente-leitura: esconde criar/excluir (o backend também bloqueia)
 const auth = useAuthStore();
@@ -61,106 +77,123 @@ function onDeleteClick(id: string) {
 </script>
 
 <template>
-  <div>
-    <div class="mb-6 flex flex-wrap items-center justify-between gap-3">
-      <h2 class="text-2xl font-semibold">Projetos</h2>
-      <button
-        v-if="auth.canEdit"
-        class="rounded-md bg-sky-600 px-4 py-2 text-sm font-medium hover:bg-sky-500"
-        @click="showForm = !showForm"
-      >
-        {{ showForm ? 'Cancelar' : '+ Novo projeto' }}
-      </button>
+  <div class="flex flex-col gap-6">
+    <div class="flex flex-wrap items-start justify-between gap-4">
+      <div>
+        <h1 class="text-2xl font-semibold tracking-tight">Projetos</h1>
+        <p class="text-sm text-muted-foreground">Mangás, quadrinhos e documentos em tradução.</p>
+      </div>
+      <div class="flex gap-2">
+        <Button
+          v-if="auth.canEdit"
+          :variant="showForm ? 'outline' : 'default'"
+          @click="showForm = !showForm"
+        >
+          <PlusIcon v-if="!showForm" data-icon="inline-start" />
+          {{ showForm ? 'Cancelar' : 'Novo projeto' }}
+        </Button>
+      </div>
     </div>
 
-    <form
-      v-if="showForm"
-      class="mb-8 rounded-lg border border-slate-800 bg-slate-900/60 p-4"
-      @submit.prevent="create.mutate()"
-    >
-      <div class="mb-4 grid gap-2 sm:grid-cols-2">
-        <button
-          v-for="k in KINDS"
-          :key="k.value"
-          type="button"
-          class="rounded-lg border p-3 text-left transition"
-          :class="
-            form.kind === k.value
-              ? 'border-sky-600 bg-sky-600/10'
-              : 'border-slate-700 hover:border-slate-500'
-          "
-          @click="form.kind = k.value"
-        >
-          <span class="block text-sm font-medium">{{ k.label }}</span>
-          <span class="mt-0.5 block text-xs text-slate-500">{{ k.hint }}</span>
-        </button>
-      </div>
+    <Card v-if="showForm">
+      <CardHeader>
+        <CardTitle>Novo projeto</CardTitle>
+        <CardDescription>O tipo define o pipeline e não muda depois de criado.</CardDescription>
+      </CardHeader>
+      <form @submit.prevent="create.mutate()">
+        <CardContent>
+          <FieldGroup>
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              :spacing="2"
+              class="grid w-full sm:grid-cols-2"
+              :model-value="form.kind"
+              @update:model-value="(v) => v && (form.kind = v as ProjectKind)"
+            >
+              <ToggleGroupItem
+                v-for="k in KINDS"
+                :key="k.value"
+                :value="k.value"
+                class="h-auto flex-col items-start gap-0.5 p-3 text-left whitespace-normal"
+              >
+                <span>{{ k.label }}</span>
+                <span class="text-xs font-normal text-muted-foreground">{{ k.hint }}</span>
+              </ToggleGroupItem>
+            </ToggleGroup>
 
-      <div class="flex flex-wrap items-end gap-3">
-        <label class="min-w-48 flex-1 text-sm">
-          <span class="mb-1 block text-slate-400">Nome do projeto</span>
-          <input
-            v-model="form.name"
-            required
-            autofocus
-            :placeholder="form.kind === 'DOCUMENT' ? 'Ex: Manual do equipamento' : 'Ex: Mangá capítulo 12'"
-            class="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 outline-none focus:border-sky-500"
-          />
-        </label>
-        <label class="w-44 text-sm">
-          <span class="mb-1 block text-slate-400">Traduzir de</span>
-          <LanguageSelect v-model="form.sourceLanguage" />
-        </label>
-        <label class="w-44 text-sm">
-          <span class="mb-1 block text-slate-400">Para</span>
-          <LanguageSelect v-model="form.targetLanguage" />
-        </label>
-        <button
-          type="submit"
-          :disabled="create.isPending.value"
-          class="rounded-md bg-sky-600 px-4 py-2 text-sm font-medium hover:bg-sky-500 disabled:opacity-50"
-        >
-          {{ create.isPending.value ? 'Criando…' : 'Criar' }}
-        </button>
-      </div>
-      <p v-if="create.error.value" class="mt-3 text-sm text-rose-400">
-        {{ create.error.value.message }}
-      </p>
-    </form>
+            <div class="grid gap-4 sm:grid-cols-[1fr_11rem_11rem]">
+              <Field>
+                <FieldLabel for="project-name">Nome do projeto</FieldLabel>
+                <Input
+                  id="project-name"
+                  v-model="form.name"
+                  required
+                  autofocus
+                  :placeholder="form.kind === 'DOCUMENT' ? 'Ex: Manual do equipamento' : 'Ex: Mangá capítulo 12'"
+                />
+              </Field>
+              <Field>
+                <FieldLabel>Traduzir de</FieldLabel>
+                <LanguageSelect v-model="form.sourceLanguage" />
+              </Field>
+              <Field>
+                <FieldLabel>Para</FieldLabel>
+                <LanguageSelect v-model="form.targetLanguage" />
+              </Field>
+            </div>
+            <FieldError v-if="create.error.value">{{ create.error.value.message }}</FieldError>
+          </FieldGroup>
+        </CardContent>
+        <CardFooter class="mt-4 justify-end">
+          <Button type="submit" :disabled="create.isPending.value">
+            <Spinner v-if="create.isPending.value" data-icon="inline-start" />
+            {{ create.isPending.value ? 'Criando…' : 'Criar' }}
+          </Button>
+        </CardFooter>
+      </form>
+    </Card>
 
-    <div v-if="projects.data.value?.length" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+    <div v-if="projects.isPending.value" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      <Skeleton v-for="i in 3" :key="i" class="h-32 rounded-xl" />
+    </div>
+
+    <div v-else-if="projects.data.value?.length" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
       <RouterLink
         v-for="p in projects.data.value"
         :key="p.id"
         :to="`/projects/${p.id}`"
-        class="group rounded-lg border border-slate-800 bg-slate-900/60 p-4 transition hover:border-sky-800"
+        class="group rounded-xl outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
       >
-        <div class="mb-2 flex items-start justify-between gap-2">
-          <p class="font-medium leading-tight">{{ p.name }}</p>
-          <StatusBadge :status="p.status" />
-        </div>
-        <p class="text-xs text-slate-500">
-          <span class="text-slate-400">{{ PROJECT_KIND_LABELS[p.kind] ?? p.kind }}</span> ·
-          {{ languageName(p.sourceLanguage) }} → {{ languageName(p.targetLanguage) }}
-        </p>
-        <div class="mt-3 flex items-center justify-between text-xs text-slate-500">
-          <span v-if="p.kind === 'DOCUMENT'">criado {{ timeAgo(p.createdAt) }}</span>
-          <span v-else>{{ p._count?.pages ?? 0 }} página(s) · criado {{ timeAgo(p.createdAt) }}</span>
-          <button
-            v-if="auth.canEdit"
-            class="opacity-0 transition group-hover:opacity-100"
-            :class="
-              confirmingDelete === p.id
-                ? 'rounded bg-rose-600 px-2 py-0.5 font-medium text-white opacity-100'
-                : 'text-slate-500 hover:text-rose-400'
-            "
-            :disabled="remove.isPending.value"
-            @click.prevent="onDeleteClick(p.id)"
-            @mouseleave="confirmingDelete === p.id && (confirmingDelete = null)"
+        <Card class="h-full transition-colors group-hover:bg-muted/40">
+          <CardHeader>
+            <CardTitle class="leading-tight">{{ p.name }}</CardTitle>
+            <CardDescription>
+              {{ PROJECT_KIND_LABELS[p.kind] ?? p.kind }} ·
+              {{ languageName(p.sourceLanguage) }} → {{ languageName(p.targetLanguage) }}
+            </CardDescription>
+            <CardAction><StatusBadge :status="p.status" /></CardAction>
+          </CardHeader>
+          <CardContent
+            class="mt-auto flex min-h-7 items-center justify-between gap-2 text-xs text-muted-foreground"
           >
-            {{ confirmingDelete === p.id ? 'Confirmar exclusão?' : 'excluir' }}
-          </button>
-        </div>
+            <span v-if="p.kind === 'DOCUMENT'">criado {{ timeAgo(p.createdAt) }}</span>
+            <span v-else>{{ p._count?.pages ?? 0 }} página(s) · criado {{ timeAgo(p.createdAt) }}</span>
+            <Button
+              v-if="auth.canEdit"
+              :variant="confirmingDelete === p.id ? 'destructive' : 'ghost'"
+              :size="confirmingDelete === p.id ? 'sm' : 'icon-sm'"
+              :class="confirmingDelete === p.id ? '' : 'opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100'"
+              :aria-label="confirmingDelete === p.id ? undefined : 'Excluir projeto'"
+              :disabled="remove.isPending.value"
+              @click.prevent="onDeleteClick(p.id)"
+              @mouseleave="confirmingDelete === p.id && (confirmingDelete = null)"
+            >
+              <template v-if="confirmingDelete === p.id">Confirmar exclusão?</template>
+              <Trash2Icon v-else />
+            </Button>
+          </CardContent>
+        </Card>
       </RouterLink>
     </div>
 
@@ -169,13 +202,10 @@ function onDeleteClick(id: string) {
       title="Nenhum projeto ainda"
       hint="Crie um projeto para começar a traduzir mangás, quadrinhos e documentos."
     >
-      <button
-        v-if="auth.canEdit"
-        class="rounded-md bg-sky-600 px-4 py-2 text-sm font-medium hover:bg-sky-500"
-        @click="showForm = true"
-      >
-        + Criar primeiro projeto
-      </button>
+      <Button v-if="auth.canEdit" @click="showForm = true">
+        <PlusIcon data-icon="inline-start" />
+        Criar primeiro projeto
+      </Button>
     </EmptyState>
   </div>
 </template>

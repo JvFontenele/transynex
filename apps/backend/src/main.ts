@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import { Server as SocketServer } from 'socket.io';
 import { registerAuth } from './auth.js';
@@ -13,6 +14,20 @@ const ctx = await createContext();
 // maxParamLength: o token JWT de /files/:token excede os 100 chars default.
 const app = Fastify({ logger: true, maxParamLength: 1000 });
 await app.register(multipart, { limits: { fileSize: 100 * 1024 * 1024 } });
+// CORS para clientes externos (extensão de navegador, ferramentas). A UI web é
+// same-origin e não depende disso. Extensões sempre liberadas; demais origens
+// via CORS_ORIGINS (lista separada por vírgula). Sem cookies: auth por Bearer.
+const corsOrigins = (process.env.CORS_ORIGINS ?? '').split(',').map((o) => o.trim()).filter(Boolean);
+await app.register(cors, {
+  origin: (origin, cb) =>
+    cb(
+      null,
+      !origin ||
+        /^(chrome|moz|safari-web)-extension:\/\//.test(origin) ||
+        corsOrigins.includes('*') ||
+        corsOrigins.includes(origin),
+    ),
+});
 
 const auth = await registerAuth(app, ctx);
 const queue = createQueue(ctx);
@@ -31,7 +46,7 @@ io.use((socket, next) => {
     next(new Error('unauthorized'));
   }
 });
-const worker = createWorker(ctx, io);
+const worker = createWorker(ctx, io, queue);
 
 const shutdown = async () => {
   await worker.close();

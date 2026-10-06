@@ -1,12 +1,22 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { useQuery } from '@tanstack/vue-query';
-import { api } from '../api';
-import { JOB_STATUS_LABELS, JOB_TYPE_LABELS, timeAgo } from '../lib/labels';
-import StatusBadge from '../components/StatusBadge.vue';
-import ProgressBar from '../components/ProgressBar.vue';
-import EmptyState from '../components/EmptyState.vue';
-import { useJobsStore } from '../stores/jobs';
+import { api } from '@/api';
+import { JOB_STATUS_LABELS, JOB_TYPE_LABELS, timeAgo } from '@/lib/labels';
+import StatusBadge from '@/components/StatusBadge.vue';
+import EmptyState from '@/components/EmptyState.vue';
+import { useJobsStore } from '@/stores/jobs';
+import { Progress } from '@/components/ui/progress';
+import { Skeleton } from '@/components/ui/skeleton';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 
 const jobsStore = useJobsStore();
 const jobs = useQuery({
@@ -45,75 +55,70 @@ const FILTERS = ['active', 'queued', 'completed', 'failed'];
 </script>
 
 <template>
-  <div>
-    <div class="mb-6 flex flex-wrap items-center justify-between gap-3">
-      <h2 class="text-2xl font-semibold">Fila de processamento</h2>
-      <div class="flex gap-1.5">
-        <button
-          class="rounded-full border px-3 py-1 text-xs transition"
-          :class="
-            statusFilter === null
-              ? 'border-sky-600 bg-sky-600/15 text-sky-300'
-              : 'border-slate-700 text-slate-400 hover:border-slate-500'
-          "
-          @click="statusFilter = null"
-        >
-          Todos ({{ merged.length }})
-        </button>
-        <button
-          v-for="s in FILTERS"
-          :key="s"
-          class="rounded-full border px-3 py-1 text-xs transition"
-          :class="
-            statusFilter === s
-              ? 'border-sky-600 bg-sky-600/15 text-sky-300'
-              : 'border-slate-700 text-slate-400 hover:border-slate-500'
-          "
-          @click="statusFilter = statusFilter === s ? null : s"
-        >
-          {{ JOB_STATUS_LABELS[s] }} ({{ counts[s] ?? 0 }})
-        </button>
+  <div class="flex flex-col gap-6">
+    <div class="flex flex-wrap items-start justify-between gap-4">
+      <div>
+        <h1 class="text-2xl font-semibold tracking-tight">Fila de processamento</h1>
+        <p class="text-sm text-muted-foreground">Jobs do pipeline, atualizados ao vivo.</p>
       </div>
+      <ToggleGroup
+        type="single"
+        variant="outline"
+        size="sm"
+        :spacing="1"
+        class="flex-wrap"
+        :model-value="statusFilter ?? 'all'"
+        @update:model-value="(v) => (statusFilter = !v || v === 'all' ? null : String(v))"
+      >
+        <ToggleGroupItem value="all">Todos ({{ merged.length }})</ToggleGroupItem>
+        <ToggleGroupItem v-for="s in FILTERS" :key="s" :value="s">
+          {{ JOB_STATUS_LABELS[s] }} ({{ counts[s] ?? 0 }})
+        </ToggleGroupItem>
+      </ToggleGroup>
     </div>
 
-    <div v-if="filtered.length" class="overflow-x-auto">
-    <table class="w-full min-w-xl text-sm">
-      <thead>
-        <tr class="border-b border-slate-800 text-left text-xs text-slate-500">
-          <th class="py-2 pr-4 font-normal">Etapa</th>
-          <th class="py-2 pr-4 font-normal">Projeto</th>
-          <th class="py-2 pr-4 font-normal">Status</th>
-          <th class="py-2 pr-4 font-normal">Progresso</th>
-          <th class="py-2 pr-4 font-normal">Quando</th>
-          <th class="py-2 font-normal">Erro</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="j in filtered" :key="j.id" class="border-b border-slate-800/50">
-          <td class="py-2.5 pr-4">{{ JOB_TYPE_LABELS[j.type] ?? j.type }}</td>
-          <td class="py-2.5 pr-4">
-            <RouterLink
-              v-if="projectName[j.projectId]"
-              :to="`/projects/${j.projectId}`"
-              class="text-sky-400 hover:underline"
-            >
-              {{ projectName[j.projectId] }}
-            </RouterLink>
-            <span v-else class="font-mono text-xs text-slate-500">{{ j.projectId.slice(-8) }}</span>
-          </td>
-          <td class="py-2.5 pr-4"><StatusBadge :status="j.status" /></td>
-          <td class="w-44 py-2.5 pr-4">
-            <ProgressBar :progress="j.progress" :failed="j.status === 'failed'" />
-          </td>
-          <td class="whitespace-nowrap py-2.5 pr-4 text-xs text-slate-500">
-            {{ timeAgo(j.finishedAt ?? j.createdAt) }}
-          </td>
-          <td class="max-w-64 py-2.5 text-xs text-rose-400" :title="j.error ?? ''">
-            <p class="truncate">{{ j.error ?? '' }}</p>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+    <div v-if="jobs.isPending.value" class="flex flex-col gap-2">
+      <Skeleton v-for="i in 5" :key="i" class="h-10" />
+    </div>
+
+    <div v-else-if="filtered.length" class="rounded-xl border">
+      <Table class="min-w-xl">
+        <TableHeader>
+          <TableRow>
+            <TableHead>Etapa</TableHead>
+            <TableHead>Projeto</TableHead>
+            <TableHead>Status</TableHead>
+            <TableHead>Progresso</TableHead>
+            <TableHead>Quando</TableHead>
+            <TableHead>Erro</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          <TableRow v-for="j in filtered" :key="j.id">
+            <TableCell>{{ JOB_TYPE_LABELS[j.type] ?? j.type }}</TableCell>
+            <TableCell>
+              <RouterLink
+                v-if="projectName[j.projectId]"
+                :to="`/projects/${j.projectId}`"
+                class="font-medium underline-offset-4 hover:underline"
+              >
+                {{ projectName[j.projectId] }}
+              </RouterLink>
+              <span v-else class="font-mono text-xs text-muted-foreground">{{ j.projectId.slice(-8) }}</span>
+            </TableCell>
+            <TableCell><StatusBadge :status="j.status" /></TableCell>
+            <TableCell class="w-44">
+              <Progress :model-value="Math.min(Math.max(j.progress, 0), 100)" />
+            </TableCell>
+            <TableCell class="text-xs text-muted-foreground">
+              {{ timeAgo(j.finishedAt ?? j.createdAt) }}
+            </TableCell>
+            <TableCell class="max-w-64 text-xs text-destructive" :title="j.error ?? ''">
+              <p class="truncate">{{ j.error ?? '' }}</p>
+            </TableCell>
+          </TableRow>
+        </TableBody>
+      </Table>
     </div>
 
     <EmptyState

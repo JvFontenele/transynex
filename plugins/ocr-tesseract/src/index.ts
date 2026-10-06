@@ -91,8 +91,15 @@ export class TesseractOCRProvider implements OCRProvider {
 
   private async getWorker(langs: string[]): Promise<Worker> {
     if (!this.worker) {
-      this.worker = await createWorker(langs, undefined, {
-        cachePath: this.cachePath,
+      // Sem errorHandler o tesseract.js relança a falha (ex: download do
+      // traineddata sem rede) como exceção não tratada e derruba o backend.
+      // Com ele, o createWorker engole o erro e nunca resolve — então o
+      // handler rejeita a promise aqui e o job falha/retenta normalmente.
+      this.worker = await new Promise<Worker>((resolve, reject) => {
+        createWorker(langs, undefined, {
+          cachePath: this.cachePath,
+          errorHandler: (err: unknown) => reject(new Error(String(err))),
+        }).then(resolve, reject);
       });
     }
     return this.worker;

@@ -2,18 +2,59 @@
 import { computed, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query';
-import { api, type Page } from '../api';
-import { formatBytes, languageName, PROJECT_KIND_LABELS, timeAgo } from '../lib/labels';
-import StatusBadge from '../components/StatusBadge.vue';
-import ProgressBar from '../components/ProgressBar.vue';
-import EmptyState from '../components/EmptyState.vue';
-import DocumentTextPanel from '../components/DocumentTextPanel.vue';
-import { useJobsStore } from '../stores/jobs';
+import {
+  ArrowLeftIcon,
+  BookOpenIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  DownloadIcon,
+  LanguagesIcon,
+  PencilLineIcon,
+  UploadIcon,
+} from '@lucide/vue';
+import { api, type Page } from '@/api';
+import {
+  formatBytes,
+  languageName,
+  PROJECT_KIND_LABELS,
+  timeAgo,
+  type StatusVariant,
+} from '@/lib/labels';
+import { cn } from '@/lib/utils';
+import StatusBadge from '@/components/StatusBadge.vue';
+import EmptyState from '@/components/EmptyState.vue';
+import DocumentTextPanel from '@/components/DocumentTextPanel.vue';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Field, FieldGroup, FieldLabel } from '@/components/ui/field';
+import { Progress } from '@/components/ui/progress';
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Spinner } from '@/components/ui/spinner';
+import { useAuthStore } from '@/stores/auth';
+import { useJobsStore } from '@/stores/jobs';
 
 const route = useRoute();
 const projectId = computed(() => route.params.id as string);
 const queryClient = useQueryClient();
 const jobsStore = useJobsStore();
+const auth = useAuthStore();
 
 const project = useQuery({
   queryKey: ['project', projectId],
@@ -31,6 +72,10 @@ const blocks = useQuery({
   enabled: isDocument,
 });
 const providers = useQuery({ queryKey: ['providers'], queryFn: api.listProviders });
+
+const hasEpub = computed(
+  () => project.data.value?.sourceFiles?.some((f) => f.mimeType === 'application/epub+zip') ?? false,
+);
 
 // "Tem o que traduzir?" — páginas no fluxo de imagem, parágrafos no de documento.
 const hasContent = computed(() =>
@@ -65,12 +110,17 @@ function onDrop(e: DragEvent) {
 // --- Pipeline (traduzir) --------------------------------------------------
 
 const translator = ref('libretranslate');
+const ocr = ref('');
 watch(
   () => providers.data.value,
   (p) => {
     const list = p?.translation ?? [];
     if (list.length && !list.some((t) => t.id === translator.value)) {
       translator.value = (list.find((t) => t.isDefault) ?? list[0]).id;
+    }
+    const ocrs = p?.ocr ?? [];
+    if (ocrs.length && !ocrs.some((o) => o.id === ocr.value)) {
+      ocr.value = (ocrs.find((o) => o.isDefault) ?? ocrs[0]).id;
     }
   },
   { immediate: true },
@@ -84,6 +134,7 @@ const retranslate = ref(false);
 const run = useMutation({
   mutationFn: () =>
     api.run(projectId.value, {
+      ocrProviderId: ocr.value || undefined,
       translationProviderId: translator.value,
       preserveManual: preserveManual.value,
       retranslate: retranslate.value,
@@ -124,7 +175,26 @@ const overallProgress = computed(() => {
 
 // --- Exportação -----------------------------------------------------------
 
+const exportFormats = computed(() =>
+  isDocument.value
+    ? [
+        ...(hasEpub.value ? [{ value: 'epub', label: 'EPUB traduzido' }] : []),
+        { value: 'txt', label: 'TXT' },
+        { value: 'markdown', label: 'Markdown' },
+      ]
+    : [
+        { value: 'pdf', label: 'PDF' },
+        { value: 'cbz', label: 'CBZ' },
+        { value: 'zip', label: 'ZIP (imagens)' },
+        { value: 'txt', label: 'TXT (só texto)' },
+        { value: 'markdown', label: 'Markdown' },
+      ],
+);
 const exportFormat = ref('pdf');
+// Formato padrão = o primeiro válido para o tipo do projeto
+watch(exportFormats, (list) => {
+  if (!list.some((f) => f.value === exportFormat.value)) exportFormat.value = list[0]!.value;
+}, { immediate: true });
 const exports = useQuery({
   queryKey: ['exports', projectId],
   queryFn: () => api.listExports(projectId.value),
@@ -141,12 +211,13 @@ jobsStore.$subscribe(() => {
   }
 });
 
-// --- Estado por página / revisão de textos --------------------------------
+// --- Estado por página -----------------------------------------------------
 
-function pageState(p: Page): { label: string; tone: string } {
-  if (!p.ocrRegions.length) return { label: 'Sem OCR', tone: 'bg-slate-500/15 text-slate-400' };
-  if (p.renderedImageUrl) return { label: 'Traduzida', tone: 'bg-emerald-500/15 text-emerald-400' };
-  return { label: 'Aguardando render', tone: 'bg-amber-500/15 text-amber-400' };
+function pageState(p: Page): { label: string; variant: StatusVariant } {
+  if (!p.ocrRegions.length) return { label: 'Sem OCR', variant: 'secondary' };
+  if (p.reviewedAt) return { label: 'Revisada', variant: 'success' };
+  if (p.renderedImageUrl) return { label: 'Traduzida', variant: 'info' };
+  return { label: 'Aguardando render', variant: 'warning' };
 }
 
 // Reordenação: move a página uma posição e envia a lista completa na nova ordem
@@ -170,166 +241,248 @@ const translatedCount = computed(
   () => pages.data.value?.filter((p) => p.renderedImageUrl).length ?? 0,
 );
 
-// Página cujos textos estão abertos para revisão rápida (null = fechado)
-const reviewPageId = ref<string | null>(null);
-const reviewPage = computed(
-  () => pages.data.value?.find((p) => p.id === reviewPageId.value) ?? null,
-);
-
-const editing = ref<string | null>(null);
-const editText = ref('');
-const saveRegion = useMutation({
-  mutationFn: ({ id, text }: { id: string; text: string }) =>
-    api.updateRegion(id, { translatedText: text }),
-  onSuccess: () => {
-    editing.value = null;
-    queryClient.invalidateQueries({ queryKey: ['pages', projectId] });
-  },
-});
 </script>
 
 <template>
-  <div v-if="project.data.value">
+  <div v-if="project.data.value" class="flex flex-col gap-6">
     <!-- Cabeçalho -->
-    <div class="mb-6">
-      <RouterLink to="/projects" class="text-xs text-slate-500 hover:text-sky-400">
-        ← Projetos
-      </RouterLink>
-      <div class="mt-1 flex flex-wrap items-center gap-3">
-        <h2 class="text-2xl font-semibold">{{ project.data.value.name }}</h2>
-        <StatusBadge :status="project.data.value.status" />
-        <span
-          class="rounded-full bg-slate-500/15 px-2 py-0.5 text-[11px] text-slate-400"
-          :title="
-            isDocument
-              ? 'Tradução em texto corrido a partir do texto do arquivo'
-              : 'Tradução desenhada de volta na página'
-          "
-        >
-          {{ PROJECT_KIND_LABELS[project.data.value.kind] ?? project.data.value.kind }}
-        </span>
-        <span class="text-sm text-slate-500">
-          {{ languageName(project.data.value.sourceLanguage) }} →
-          {{ languageName(project.data.value.targetLanguage) }}
-        </span>
-      </div>
-    </div>
-
-    <!-- Barra de ações: traduzir + exportar -->
-    <div
-      class="mb-6 flex flex-wrap items-center gap-x-4 gap-y-3 rounded-lg border border-slate-800 bg-slate-900/60 p-4"
-    >
-      <select
-        v-model="translator"
-        title="Provider de tradução"
-        class="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm"
-      >
-        <option v-for="t in providers.data.value?.translation ?? []" :key="t.id" :value="t.id">
-          {{ t.name }}
-        </option>
-      </select>
-      <label
-        v-if="!isDocument"
-        class="flex cursor-pointer items-center gap-1.5 text-xs text-slate-400"
-        title="Regiões que você criou ou editou no editor são mantidas; só as detecções automáticas são refeitas. Desmarque para refazer tudo do zero."
-      >
-        <input v-model="preserveManual" type="checkbox" class="accent-sky-500" />
-        Manter minhas marcações
-      </label>
-      <label
-        v-else
-        class="flex cursor-pointer items-center gap-1.5 text-xs text-slate-400"
-        title="Por padrão só os parágrafos ainda sem tradução são enviados ao provider. Marque para descartar as traduções atuais e refazer o documento inteiro."
-      >
-        <input v-model="retranslate" type="checkbox" class="accent-sky-500" />
-        Refazer traduções existentes
-      </label>
-      <button
-        :disabled="run.isPending.value || running.length > 0 || !hasContent"
-        class="rounded-md bg-sky-600 px-4 py-2 text-sm font-medium hover:bg-sky-500 disabled:opacity-50"
-        :title="
-          hasContent
-            ? ''
-            : isDocument
-              ? 'Envie um PDF e aguarde a extração do texto'
-              : 'Envie arquivos primeiro'
-        "
-        @click="run.mutate()"
-      >
-        {{
-          running.length > 0 ? 'Processando…' : isDocument ? 'Traduzir documento' : 'Traduzir tudo'
-        }}
-      </button>
-      <p v-if="run.error.value" class="text-xs text-rose-400">{{ run.error.value.message }}</p>
-
-      <div class="ml-auto flex flex-wrap items-center gap-2">
-        <template v-if="!isDocument">
-          <span class="text-sm text-slate-400">Exportar</span>
-          <select
-            v-model="exportFormat"
-            class="rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm"
-          >
-            <option value="pdf">PDF</option>
-            <option value="cbz">CBZ</option>
-            <option value="zip">ZIP (imagens)</option>
-            <option value="txt">TXT (só texto)</option>
-            <option value="markdown">Markdown</option>
-          </select>
-          <button
-            :disabled="doExport.isPending.value || exporting !== null || !pages.data.value?.length"
-            class="rounded-md border border-slate-700 px-3 py-1.5 text-sm hover:border-sky-600 disabled:opacity-50"
-            @click="doExport.mutate()"
-          >
-            {{ exporting ? 'Exportando…' : 'Exportar' }}
-          </button>
-        </template>
-        <RouterLink
-          v-if="isDocument && hasContent"
-          :to="{ name: 'document-reader', params: { id: projectId } }"
-          class="rounded-md border border-slate-700 px-3 py-1.5 text-sm text-slate-200 hover:border-sky-600"
-          title="Ler a tradução em texto corrido (com opção de ver o original ao lado)"
-        >
-          Ler tradução
+    <div class="flex flex-col gap-2">
+      <Button variant="ghost" size="sm" as-child class="-ml-2 w-fit text-muted-foreground">
+        <RouterLink to="/projects">
+          <ArrowLeftIcon data-icon="inline-start" />
+          Projetos
         </RouterLink>
-        <RouterLink
-          v-else-if="!isDocument && pages.data.value?.length"
-          :to="{ name: 'reader', params: { id: projectId } }"
-          class="rounded-md border border-slate-700 px-3 py-1.5 text-sm text-slate-200 hover:border-sky-600"
-          :title="`Leitura contínua — ${translatedCount} de ${pages.data.value.length} página(s) traduzida(s)`"
-        >
-          Modo leitura
-        </RouterLink>
+      </Button>
+      <div class="flex flex-wrap items-start justify-between gap-4">
+        <div class="flex min-w-0 flex-col gap-2">
+          <h1 class="text-2xl font-semibold tracking-tight break-words">
+            {{ project.data.value.name }}
+          </h1>
+          <div class="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+            <StatusBadge :status="project.data.value.status" />
+            <Badge
+              variant="outline"
+              :title="
+                isDocument
+                  ? 'Tradução em texto corrido a partir do texto do arquivo'
+                  : 'Tradução desenhada de volta na página'
+              "
+            >
+              {{ PROJECT_KIND_LABELS[project.data.value.kind] ?? project.data.value.kind }}
+            </Badge>
+            <span>
+              {{ languageName(project.data.value.sourceLanguage) }} →
+              {{ languageName(project.data.value.targetLanguage) }}
+            </span>
+          </div>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <Button v-if="isDocument && hasContent" variant="outline" as-child>
+            <RouterLink
+              :to="{ name: hasEpub ? 'book-reader' : 'document-reader', params: { id: projectId } }"
+              :title="
+                hasEpub
+                  ? 'Ler o livro com a tradução aplicada'
+                  : 'Ler a tradução em texto corrido (com opção de ver o original ao lado)'
+              "
+            >
+              <BookOpenIcon data-icon="inline-start" />
+              Ler tradução
+            </RouterLink>
+          </Button>
+          <Button v-else-if="!isDocument && pages.data.value?.length" variant="outline" as-child>
+            <RouterLink
+              :to="{ name: 'reader', params: { id: projectId } }"
+              :title="`Leitura contínua — ${translatedCount} de ${pages.data.value.length} página(s) traduzida(s)`"
+            >
+              <BookOpenIcon data-icon="inline-start" />
+              Modo leitura
+            </RouterLink>
+          </Button>
+          <Button v-if="auth.canEdit && hasContent" variant="outline" as-child>
+            <RouterLink
+              :to="{
+                name: isDocument ? 'document-reader' : 'reader',
+                params: { id: projectId },
+                query: { review: '1' },
+              }"
+              title="Ler e corrigir a tradução direto no leitor"
+            >
+              <PencilLineIcon data-icon="inline-start" />
+              Revisar
+            </RouterLink>
+          </Button>
+          <!-- span carrega o title: botão desabilitado não recebe hover -->
+          <span
+            class="inline-flex"
+            :title="
+              hasContent
+                ? ''
+                : isDocument
+                  ? 'Envie um PDF e aguarde a extração do texto'
+                  : 'Envie arquivos primeiro'
+            "
+          >
+            <Button
+              :disabled="run.isPending.value || running.length > 0 || !hasContent"
+              @click="run.mutate()"
+            >
+              <Spinner v-if="run.isPending.value || running.length > 0" data-icon="inline-start" />
+              <LanguagesIcon v-else data-icon="inline-start" />
+              {{
+                running.length > 0
+                  ? 'Processando…'
+                  : isDocument
+                    ? 'Traduzir documento'
+                    : 'Traduzir tudo'
+              }}
+            </Button>
+          </span>
+        </div>
       </div>
     </div>
 
-    <!-- Progresso do pipeline -->
-    <div v-if="running.length > 0" class="mb-6 rounded-lg border border-slate-800 bg-slate-900/60 p-4">
-      <div class="mb-1.5 flex justify-between text-xs text-slate-400">
-        <span v-if="isDocument">Traduzindo {{ running.length }} arquivo(s)…</span>
-        <span v-else>Traduzindo {{ running.length }} página(s)…</span>
-        <span>{{ overallProgress }}%</span>
-      </div>
-      <ProgressBar :progress="overallProgress" />
-    </div>
+    <!-- Tradução + exportação -->
+    <div class="grid gap-6 lg:grid-cols-2">
+      <Card>
+        <CardHeader>
+          <CardTitle>Tradução</CardTitle>
+          <CardDescription>Provider e opções usados ao traduzir.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <FieldGroup>
+            <Field v-if="!isDocument">
+              <FieldLabel for="ocr">OCR</FieldLabel>
+              <Select v-model="ocr">
+                <SelectTrigger id="ocr" class="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectItem v-for="o in providers.data.value?.ocr ?? []" :key="o.id" :value="o.id">
+                      {{ o.name }}
+                    </SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field>
+              <FieldLabel for="translator">Provider de tradução</FieldLabel>
+              <Select v-model="translator">
+                <SelectTrigger id="translator" class="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectItem
+                      v-for="t in providers.data.value?.translation ?? []"
+                      :key="t.id"
+                      :value="t.id"
+                    >
+                      {{ t.name }}
+                    </SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field
+              v-if="!isDocument"
+              orientation="horizontal"
+              title="Regiões que você criou ou editou no editor são mantidas; só as detecções automáticas são refeitas. Desmarque para refazer tudo do zero."
+            >
+              <Checkbox id="preserve-manual" v-model="preserveManual" />
+              <FieldLabel for="preserve-manual" class="font-normal">
+                Manter minhas marcações
+              </FieldLabel>
+            </Field>
+            <Field
+              v-else
+              orientation="horizontal"
+              title="Por padrão só os parágrafos ainda sem tradução são enviados ao provider. Marque para descartar as traduções atuais e refazer o documento inteiro."
+            >
+              <Checkbox id="retranslate" v-model="retranslate" />
+              <FieldLabel for="retranslate" class="font-normal">
+                Refazer traduções existentes
+              </FieldLabel>
+            </Field>
+            <!-- Progresso do pipeline -->
+            <div v-if="running.length > 0" class="flex flex-col gap-2">
+              <div class="flex justify-between text-sm text-muted-foreground">
+                <span v-if="isDocument">Traduzindo {{ running.length }} arquivo(s)…</span>
+                <span v-else>Traduzindo {{ running.length }} página(s)…</span>
+                <span class="tabular-nums">{{ overallProgress }}%</span>
+              </div>
+              <Progress :model-value="overallProgress" />
+            </div>
+            <p v-if="run.error.value" class="text-sm text-destructive">
+              {{ run.error.value.message }}
+            </p>
+          </FieldGroup>
+        </CardContent>
+      </Card>
 
-    <!-- Downloads recentes -->
-    <div v-if="exports.data.value?.length" class="mb-6 flex flex-wrap items-center gap-2">
-      <span class="text-xs text-slate-500">Downloads:</span>
-      <a
-        v-for="e in exports.data.value.slice(0, 6)"
-        :key="e.id"
-        :href="e.downloadUrl"
-        class="rounded-md border border-slate-700 px-2.5 py-1 text-xs text-sky-400 hover:border-sky-600"
-        :title="`Gerado ${timeAgo(e.createdAt)}`"
-      >
-        ⬇ {{ e.format.toUpperCase() }} · {{ formatBytes(e.sizeBytes) }}
-      </a>
+      <Card>
+        <CardHeader>
+          <CardTitle>Exportação</CardTitle>
+          <CardDescription>Gere o arquivo final e baixe as exportações recentes.</CardDescription>
+        </CardHeader>
+        <CardContent class="flex flex-col gap-4">
+          <Field>
+            <FieldLabel for="export-format">Formato</FieldLabel>
+            <div class="flex gap-2">
+              <Select v-model="exportFormat">
+                <SelectTrigger id="export-format" class="min-w-0 flex-1">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectItem v-for="f in exportFormats" :key="f.value" :value="f.value">
+                      {{ f.label }}
+                    </SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <Button
+                variant="outline"
+                :disabled="doExport.isPending.value || exporting !== null || !hasContent"
+                @click="doExport.mutate()"
+              >
+                <Spinner v-if="exporting" data-icon="inline-start" />
+                {{ exporting ? 'Exportando…' : 'Exportar' }}
+              </Button>
+            </div>
+          </Field>
+
+          <!-- Downloads recentes -->
+          <div v-if="exports.data.value?.length" class="flex flex-col gap-2">
+            <p class="text-xs font-medium text-muted-foreground">Downloads</p>
+            <div class="flex flex-wrap gap-2">
+              <Button
+                v-for="e in exports.data.value.slice(0, 6)"
+                :key="e.id"
+                variant="secondary"
+                size="sm"
+                as-child
+              >
+                <a :href="e.downloadUrl" :title="`Gerado ${timeAgo(e.createdAt)}`">
+                  <DownloadIcon data-icon="inline-start" />
+                  {{ e.format.toUpperCase() }} · {{ formatBytes(e.sizeBytes) }}
+                </a>
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
     </div>
 
     <!-- Dropzone -->
     <div
-      class="mb-8 rounded-lg border-2 border-dashed p-6 text-center transition"
-      :class="dragOver ? 'border-sky-500 bg-sky-500/5' : 'border-slate-700'"
+      :class="
+        cn(
+          'flex flex-col items-center gap-1 rounded-xl border-2 border-dashed p-6 text-center transition-colors',
+          dragOver && 'border-primary bg-muted/50',
+        )
+      "
       @dragover.prevent="dragOver = true"
       @dragleave="dragOver = false"
       @drop.prevent="onDrop"
@@ -339,25 +492,32 @@ const saveRegion = useMutation({
         type="file"
         :accept="
           isDocument
-            ? 'application/pdf,image/png,image/jpeg,image/webp,image/tiff'
+            ? 'application/pdf,.epub,image/png,image/jpeg,image/webp,image/tiff'
             : 'image/png,image/jpeg,image/webp,image/tiff,application/pdf,.cbz,.zip'
         "
         multiple
         class="hidden"
         @change="onFileChange"
       />
-      <p class="text-sm text-slate-400">
+      <UploadIcon class="mb-1 size-5 text-muted-foreground" />
+      <p class="text-sm text-muted-foreground">
         Arraste arquivos aqui ou
-        <button class="text-sky-400 hover:underline" @click="fileInput?.click()">
+        <Button variant="link" class="h-auto p-0" @click="fileInput?.click()">
           escolha no computador
-        </button>
+        </Button>
       </p>
-      <p v-if="isDocument" class="mt-1 text-xs text-slate-600">
-        PDF (com texto ou escaneado). Se não houver camada de texto, o OCR entra automaticamente.
+      <p v-if="isDocument" class="text-xs text-muted-foreground">
+        PDF (com texto ou escaneado) ou EPUB. PDF sem camada de texto passa por OCR automaticamente.
       </p>
-      <p v-else class="mt-1 text-xs text-slate-600">PNG, JPEG, WEBP, TIFF, PDF, CBZ ou ZIP</p>
-      <p v-if="upload.isPending.value" class="mt-2 text-xs text-sky-400">Enviando…</p>
-      <p v-if="upload.error.value" class="mt-2 text-xs text-rose-400">
+      <p v-else class="text-xs text-muted-foreground">PNG, JPEG, WEBP, TIFF, PDF, CBZ ou ZIP</p>
+      <p
+        v-if="upload.isPending.value"
+        class="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground"
+      >
+        <Spinner class="size-3" />
+        Enviando…
+      </p>
+      <p v-if="upload.error.value" class="mt-1 text-xs text-destructive">
         {{ upload.error.value.message }}
       </p>
     </div>
@@ -372,133 +532,84 @@ const saveRegion = useMutation({
 
     <!-- Grade de páginas -->
     <template v-else-if="pages.data.value?.length">
-      <h3 class="mb-3 text-lg font-medium">Páginas</h3>
-      <div class="mb-8 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-        <div
-          v-for="(page, idx) in pages.data.value"
-          :key="page.id"
-          class="group overflow-hidden rounded-lg border border-slate-800 bg-slate-900/60 transition hover:border-sky-800"
-        >
-          <RouterLink
-            :to="{ name: 'page-editor', params: { id: projectId, pageId: page.id } }"
-            title="Abrir no editor"
-          >
-            <div class="relative aspect-3/4 overflow-hidden bg-slate-950">
-              <img
-                :src="page.renderedImageUrl ?? page.sourceImageUrl"
-                class="h-full w-full object-cover object-top transition group-hover:scale-[1.02]"
-                loading="lazy"
-              />
-              <span
-                class="absolute left-2 top-2 rounded-full px-2 py-0.5 text-[11px]"
-                :class="pageState(page).tone"
-              >
-                {{ pageState(page).label }}
-              </span>
-            </div>
-          </RouterLink>
-          <div class="flex items-center justify-between px-2.5 py-2 text-xs">
-            <span class="flex items-center gap-1 text-slate-400">
-              <button
-                class="rounded px-1 text-slate-600 opacity-0 transition hover:bg-slate-800 hover:text-slate-200 group-hover:opacity-100 disabled:invisible"
-                :disabled="idx === 0 || reorder.isPending.value"
-                title="Mover para antes"
-                @click="movePage(page.id, -1)"
-              >
-                ◀
-              </button>
-              Página {{ idx + 1 }}
-              <button
-                class="rounded px-1 text-slate-600 opacity-0 transition hover:bg-slate-800 hover:text-slate-200 group-hover:opacity-100 disabled:invisible"
-                :disabled="idx === (pages.data.value?.length ?? 0) - 1 || reorder.isPending.value"
-                title="Mover para depois"
-                @click="movePage(page.id, 1)"
-              >
-                ▶
-              </button>
-            </span>
-            <button
-              v-if="page.ocrRegions.length"
-              class="text-sky-400 hover:underline"
-              @click="reviewPageId = reviewPageId === page.id ? null : page.id"
+      <Card>
+        <CardHeader>
+          <CardTitle>Páginas</CardTitle>
+          <CardDescription>
+            {{ translatedCount }} de {{ pages.data.value.length }} traduzida(s)
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+            <div
+              v-for="(page, idx) in pages.data.value"
+              :key="page.id"
+              class="group flex flex-col overflow-hidden rounded-lg border bg-background transition-colors hover:border-ring"
             >
-              {{ reviewPageId === page.id ? 'fechar textos' : `${page.ocrRegions.length} textos` }}
-            </button>
-            <span v-else class="text-slate-600">sem textos</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Revisão rápida de textos da página selecionada -->
-      <div
-        v-if="reviewPage"
-        class="mb-8 rounded-lg border border-slate-800 bg-slate-900/60 p-4"
-      >
-        <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <h3 class="text-sm font-medium">
-            Textos da página {{ reviewPage.order + 1 }}
-            <span class="ml-2 text-xs font-normal text-slate-500">
-              clique numa tradução para corrigir
-            </span>
-          </h3>
-          <RouterLink
-            :to="{ name: 'page-editor', params: { id: projectId, pageId: reviewPage.id } }"
-            class="text-xs text-sky-400 hover:underline"
-          >
-            Abrir no editor visual →
-          </RouterLink>
-        </div>
-        <div class="overflow-x-auto">
-        <table class="w-full min-w-lg text-sm">
-          <thead>
-            <tr class="border-b border-slate-800 text-left text-xs text-slate-500">
-              <th class="py-2 pr-4 font-normal">Original</th>
-              <th class="py-2 pr-4 font-normal">Tradução</th>
-              <th class="py-2 font-normal">Confiança</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="r in reviewPage.ocrRegions"
-              :key="r.id"
-              class="border-b border-slate-800/50 align-top"
-            >
-              <td class="py-2 pr-4 text-slate-300">{{ r.sourceText }}</td>
-              <td class="py-2 pr-4">
-                <div v-if="editing === r.id" class="flex gap-2">
-                  <input
-                    v-model="editText"
-                    class="flex-1 rounded border border-sky-600 bg-slate-950 px-2 py-1"
-                    autofocus
-                    @keyup.enter="saveRegion.mutate({ id: r.id, text: editText })"
-                    @keyup.esc="editing = null"
+              <RouterLink
+                :to="{ name: 'page-editor', params: { id: projectId, pageId: page.id } }"
+                title="Abrir no editor"
+              >
+                <div class="relative aspect-3/4 overflow-hidden bg-muted">
+                  <img
+                    :src="page.renderedImageUrl ?? page.sourceImageUrl"
+                    :alt="`Página ${idx + 1}`"
+                    class="size-full object-cover object-top transition-transform group-hover:scale-[1.02]"
+                    loading="lazy"
                   />
-                  <button
-                    class="text-xs text-sky-400"
-                    :disabled="saveRegion.isPending.value"
-                    @click="saveRegion.mutate({ id: r.id, text: editText })"
-                  >
-                    salvar
-                  </button>
+                  <span class="absolute top-2 left-2 rounded-4xl bg-background/90 shadow-sm">
+                    <Badge :variant="pageState(page).variant">{{ pageState(page).label }}</Badge>
+                  </span>
                 </div>
-                <button
-                  v-else
-                  class="text-left hover:text-sky-300"
-                  :class="r.translatedText ? '' : 'italic text-slate-600'"
-                  @click="
-                    editing = r.id;
-                    editText = r.translatedText ?? '';
-                  "
+              </RouterLink>
+              <div class="flex flex-wrap items-center justify-between gap-1 px-1.5 py-1.5 text-xs">
+                <span class="flex items-center gap-0.5 text-muted-foreground">
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    class="disabled:invisible sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+                    :disabled="idx === 0 || reorder.isPending.value"
+                    title="Mover para antes"
+                    aria-label="Mover para antes"
+                    @click="movePage(page.id, -1)"
+                  >
+                    <ChevronLeftIcon />
+                  </Button>
+                  <span class="whitespace-nowrap">Página {{ idx + 1 }}</span>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    class="disabled:invisible sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+                    :disabled="idx === (pages.data.value?.length ?? 0) - 1 || reorder.isPending.value"
+                    title="Mover para depois"
+                    aria-label="Mover para depois"
+                    @click="movePage(page.id, 1)"
+                  >
+                    <ChevronRightIcon />
+                  </Button>
+                </span>
+                <Button
+                  v-if="page.ocrRegions.length && auth.canEdit"
+                  variant="link"
+                  size="xs"
+                  class="h-auto px-1"
+                  as-child
                 >
-                  {{ r.translatedText ?? 'sem tradução' }}
-                </button>
-              </td>
-              <td class="py-2 text-xs text-slate-500">{{ (r.confidence * 100).toFixed(0) }}%</td>
-            </tr>
-          </tbody>
-        </table>
-        </div>
-      </div>
+                  <RouterLink
+                    :to="{ name: 'reader', params: { id: projectId }, query: { review: '1', page: idx } }"
+                  >
+                    revisar
+                  </RouterLink>
+                </Button>
+                <span v-else-if="!page.ocrRegions.length" class="px-1 text-muted-foreground">
+                  sem textos
+                </span>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
     </template>
 
     <EmptyState
@@ -507,8 +618,21 @@ const saveRegion = useMutation({
       hint="Envie imagens, um PDF ou um CBZ/ZIP na área acima — as páginas aparecem aqui."
     />
   </div>
-  <p v-else-if="project.isError.value" class="text-rose-400">
-    {{ project.error.value?.message }}
-  </p>
-  <p v-else class="text-slate-500">Carregando…</p>
+  <Alert v-else-if="project.isError.value" variant="destructive">
+    <AlertTitle>Não foi possível carregar o projeto</AlertTitle>
+    <AlertDescription>{{ project.error.value?.message }}</AlertDescription>
+  </Alert>
+  <div v-else class="flex flex-col gap-6" aria-busy="true">
+    <span class="sr-only">Carregando…</span>
+    <div class="flex flex-col gap-2">
+      <Skeleton class="h-4 w-20" />
+      <Skeleton class="h-8 w-64 max-w-full" />
+      <Skeleton class="h-5 w-48" />
+    </div>
+    <div class="grid gap-6 lg:grid-cols-2">
+      <Skeleton class="h-48 rounded-xl" />
+      <Skeleton class="h-48 rounded-xl" />
+    </div>
+    <Skeleton class="h-28 rounded-xl" />
+  </div>
 </template>

@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import sharp from 'sharp';
 import type { FastifyInstance } from 'fastify';
 import type { Queue } from 'bullmq';
@@ -13,15 +14,18 @@ import type { AppContext } from './context.js';
 import { actorOf, type Actor, type AuthHelpers } from './auth.js';
 import { decryptSecrets, encryptSecrets } from './secrets.js';
 import type { QueueJobData } from './queue.js';
+import {
+  defaultProviderFor as defaultProviderForCtx,
+  enqueueRun,
+  EPUB_MIME,
+  IMAGE_MIMES,
+  ingestFile,
+  isSupportedMime,
+  type RunOptions,
+} from './pipeline.js';
 
-const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/tiff']);
-const EXTRACT_MIMES = new Set([
-  'application/pdf',
-  'application/zip',
-  'application/x-cbz',
-  'application/vnd.comicbook+zip',
-]);
 const EXPORT_FORMATS = new Set<string>(['pdf', 'cbz', 'zip', 'txt', 'markdown']);
+const DOC_EXPORT_FORMATS = new Set<string>(['txt', 'markdown', 'epub']);
 
 export function registerRoutes(
   app: FastifyInstance,
@@ -82,7 +86,14 @@ export function registerRoutes(
       include: { sourceFiles: true, _count: { select: { pages: true } } },
     });
     if (!project) return reply.code(404).send({ error: 'Projeto não encontrado' });
-    return project;
+    // URL assinada do original: o leitor de EPUB abre o livro direto dela.
+    return {
+      ...project,
+      sourceFiles: project.sourceFiles.map((f) => ({
+        ...f,
+        fileUrl: f.fileRef ? auth.fileUrlFor(f.fileRef) : null,
+      })),
+    };
   });
 
   app.delete<{ Params: { id: string } }>('/api/v1/projects/:id', async (req, reply) => {
@@ -101,94 +112,163 @@ export function registerRoutes(
 
     const file = await req.file();
     if (!file) return reply.code(400).send({ error: 'Nenhum arquivo enviado' });
-    const isImage = IMAGE_MIMES.has(file.mimetype);
-    if (!isImage && !EXTRACT_MIMES.has(file.mimetype)) {
+    if (!isSupportedMime(file.mimetype)) {
+      return reply.code(415).send({ error: `Tipo não suportado: ${file.mimetype}` });
+    }
+    const { code, body } = await ingestFile(ctx, queue, project, {
+      filename: file.filename,
+      mimetype: file.mimetype,
+      buffer: await file.toBuffer(),
+    });
+    return reply.code(code).send(body);
+  });
+
+  // --- Envio rápido -------------------------------------------------------
+  // Um arquivo, sem criar projeto antes: o projeto é criado implicitamente
+  // (nome = arquivo), recebe o upload e roda o pipeline sozinho.
+  // Idiomas e kind vão na query para não depender da ordem dos campos multipart.
+
+  app.post<{
+    Querystring: { sourceLanguage?: string; targetLanguage?: string; kind?: 'IMAGE' | 'DOCUMENT' } & RunOptions;
+  }>('/api/v1/quick', async (req, reply) => {
+    const { sourceLanguage, targetLanguage, kind: forcedKind, ...runOptions } = req.query;
+    if (!sourceLanguage || !targetLanguage) {
+      return reply.code(400).send({ error: 'sourceLanguage e targetLanguage são obrigatórios' });
+    }
+    if (forcedKind !== undefined && forcedKind !== 'IMAGE' && forcedKind !== 'DOCUMENT') {
+      return reply.code(400).send({ error: `kind inválido: ${forcedKind}` });
+    }
+    const file = await req.file();
+    if (!file) return reply.code(400).send({ error: 'Nenhum arquivo enviado' });
+    if (!isSupportedMime(file.mimetype)) {
+      return reply.code(415).send({ error: `Tipo não suportado: ${file.mimetype}` });
+    }
+    // PDF/EPUB tendem a ser documento (texto corrido); imagens e CBZ/ZIP, HQ.
+    const kind: 'IMAGE' | 'DOCUMENT' =
+      forcedKind ??
+      (file.mimetype === 'application/pdf' || file.mimetype === EPUB_MIME ? 'DOCUMENT' : 'IMAGE');
+    const buffer = await file.toBuffer();
+    const project = await ctx.prisma.project.create({
+      data: {
+        name: path.parse(file.filename).name || file.filename,
+        kind,
+        sourceLanguage,
+        targetLanguage,
+        ownerId: actorOf(req).sub,
+      },
+    });
+    const { code, body } = await ingestFile(
+      ctx,
+      queue,
+      project,
+      { filename: file.filename, mimetype: file.mimetype, buffer },
+      runOptions,
+    );
+    if (code >= 400) {
+      await ctx.prisma.project.delete({ where: { id: project.id } });
+      return reply.code(code).send(body);
+    }
+    return reply.code(201).send({ projectId: project.id, kind, ...body });
+  });
+
+  // --- Tradução avulsa (sem estado) ----------------------------------------
+  // Para extensão/integrações: OCR + tradução de uma imagem, resposta síncrona,
+  // nada persiste no banco. `render=1` devolve também a imagem traduzida (PNG
+  // em data URL).
+
+  app.post<{
+    Querystring: {
+      sourceLanguage?: string;
+      targetLanguage?: string;
+      render?: string;
+      ocrProviderId?: string;
+      translationProviderId?: string;
+    };
+  }>('/api/v1/translate/image', async (req, reply) => {
+    const { sourceLanguage, targetLanguage } = req.query;
+    if (!sourceLanguage || !targetLanguage) {
+      return reply.code(400).send({ error: 'sourceLanguage e targetLanguage são obrigatórios' });
+    }
+    const file = await req.file();
+    if (!file) return reply.code(400).send({ error: 'Nenhum arquivo enviado' });
+    if (!IMAGE_MIMES.has(file.mimetype)) {
       return reply.code(415).send({ error: `Tipo não suportado: ${file.mimetype}` });
     }
 
-    const buffer = await file.toBuffer();
-    const sourceFile = await ctx.prisma.sourceFile.create({
-      data: {
-        projectId: project.id,
-        fileName: file.filename,
-        mimeType: file.mimetype,
-        fileRef: '',
-        sizeBytes: buffer.length,
-        status: 'extracting',
-      },
-    });
-
-    const ext = path.extname(file.filename) || '';
-    const fileRef = `projects/${project.id}/source/${sourceFile.id}${ext}`;
-    await ctx.storage.save(fileRef, buffer);
-    await ctx.prisma.sourceFile.update({ where: { id: sourceFile.id }, data: { fileRef } });
-
-    const createPage = () =>
-      ctx.prisma.page.count({ where: { projectId: project.id } }).then((order) =>
-        ctx.prisma.page.create({
-          data: {
-            projectId: project.id,
-            sourceFileId: sourceFile.id,
-            order,
-            sourceImageRef: fileRef,
-          },
-        }),
+    // Providers recebem StorageRef: a imagem passa por um arquivo temporário.
+    const id = randomUUID();
+    // (o renderer grava em <avô>/rendered/<pageId>.png → tmp/translate/rendered/<id>.png)
+    const imageRef = `tmp/translate/source/${id}${path.extname(file.filename) || '.png'}`;
+    await ctx.storage.save(imageRef, await file.toBuffer());
+    let renderedRef: string | null = null;
+    try {
+      const ocr = ctx.registry.get<OCRProvider>(
+        'ocr',
+        req.query.ocrProviderId ?? (await defaultProviderFor('ocr', 'tesseract-ocr')),
       );
-
-    // Projeto de documento: todo upload passa por um job de extração de
-    // parágrafos (camada de texto do PDF ou, se for scan, OCR). Imagens soltas
-    // também ganham uma Page, porque o fallback de OCR lê a partir dela.
-    if (project.kind === 'DOCUMENT') {
-      if (isImage) await createPage();
-      const job = await ctx.prisma.job.create({
-        data: { projectId: project.id, type: 'extraction', status: 'queued' },
-      });
-      await queue.add(
-        'extract-doc',
-        {
-          kind: 'extract-doc',
-          jobId: job.id,
-          projectId: project.id,
-          sourceFileId: sourceFile.id,
-          sourceLanguage: project.sourceLanguage,
-          ocrProviderId: await defaultProviderFor('ocr', 'tesseract-ocr'),
-        },
-        { attempts: 2 },
+      const translator = ctx.registry.get<TranslationProvider>(
+        'translation',
+        req.query.translationProviderId ??
+          (await defaultProviderFor('translation', 'libretranslate')),
       );
-      return reply.code(202).send({ sourceFileId: sourceFile.id, jobId: job.id });
-    }
-
-    if (isImage) {
-      const page = await createPage();
-      await ctx.prisma.sourceFile.update({
-        where: { id: sourceFile.id },
-        data: { status: 'extracted' },
+      const { regions } = await ocr.recognize({
+        pageId: id,
+        imageRef,
+        languageHint: [sourceLanguage],
       });
-      return reply.code(201).send({ sourceFileId: sourceFile.id, pageId: page.id });
-    }
+      const translated = regions.length
+        ? await translator.translateBatch(
+            regions.map((r) => ({ text: r.text, sourceLanguage, targetLanguage })),
+          )
+        : [];
+      const out = regions.map((r, i) => ({
+        boundingBox: r.boundingBox,
+        orientation: r.orientation,
+        confidence: r.confidence,
+        text: r.text,
+        translation: translated[i]?.translatedText ?? null,
+      }));
 
-    const job = await ctx.prisma.job.create({
-      data: { projectId: project.id, type: 'extraction', status: 'queued' },
-    });
-    await queue.add(
-      'extract',
-      { kind: 'extract', jobId: job.id, projectId: project.id, sourceFileId: sourceFile.id },
-      { attempts: 2 },
-    );
-    return reply.code(202).send({ sourceFileId: sourceFile.id, jobId: job.id });
+      let image: string | null = null;
+      if (req.query.render === '1' || req.query.render === 'true') {
+        const renderer = ctx.registry.get<RenderProvider>(
+          'render',
+          await defaultProviderFor('render', 'canvas-render'),
+        );
+        const rendered = await renderer.render({
+          pageId: id,
+          baseImageRef: imageRef,
+          textBlocks: out
+            .map((r, i) => ({
+              regionId: String(i),
+              boundingBox: r.boundingBox,
+              text: (r.translation ?? r.text).trim(),
+            }))
+            .filter((b) => b.text.length > 0),
+        });
+        renderedRef = rendered.imageRef;
+        image = `data:image/png;base64,${(await ctx.storage.read(renderedRef)).toString('base64')}`;
+      }
+      return { regions: out, image };
+    } finally {
+      await ctx.storage.delete(imageRef).catch(() => {});
+      if (renderedRef) await ctx.storage.delete(renderedRef).catch(() => {});
+    }
   });
 
   // --- Pages e Regions (correção) ----------------------------------------
 
   // Qualquer mutação de região invalida a renderização da página
   // (regra do ARCHITECTURE.md §7).
+  // Também desfaz a revisão: o que foi revisado não é mais o que está lá.
   const dirtyPage = (pageId: string) =>
-    ctx.prisma.page.update({ where: { id: pageId }, data: { renderedImageRef: null } });
+    ctx.prisma.page.update({
+      where: { id: pageId },
+      data: { renderedImageRef: null, reviewedAt: null },
+    });
 
-  // Fallback: default configurado na tela de Configurações, depois o built-in
-  const defaultProviderFor = async (type: string, fallback: string) =>
-    (await ctx.prisma.providerConfig.findFirst({ where: { type, isDefault: true } }))
-      ?.providerId ?? fallback;
+  const defaultProviderFor = (type: string, fallback: string) =>
+    defaultProviderForCtx(ctx, type, fallback);
 
   const isValidBoundingBox = (box: unknown): box is { x: number; y: number; width: number; height: number } => {
     if (typeof box !== 'object' || box === null) return false;
@@ -428,6 +508,23 @@ export function registerRoutes(
     return withImageUrls(updated);
   });
 
+  // Revisão no leitor: marca/desmarca a página como revisada.
+  app.post<{ Params: { id: string }; Body: { reviewed?: boolean } }>(
+    '/api/v1/pages/:id/review',
+    async (req, reply) => {
+      const page = await ctx.prisma.page.findFirst({
+        where: { id: req.params.id, project: projectScope(actorOf(req)) },
+      });
+      if (!page) return reply.code(404).send({ error: 'Página não encontrada' });
+      const updated = await ctx.prisma.page.update({
+        where: { id: page.id },
+        data: { reviewedAt: req.body?.reviewed === false ? null : new Date() },
+        include: { ocrRegions: { orderBy: { readingOrder: 'asc' } } },
+      });
+      return withImageUrls(updated);
+    },
+  );
+
   // --- Documento (texto corrido) -------------------------------------------
 
   // Parágrafos do projeto na ordem de leitura: alimenta o leitor de texto
@@ -442,110 +539,39 @@ export function registerRoutes(
     });
   });
 
+  // Edição/revisão de um parágrafo no leitor de documento. Editar o texto
+  // desfaz a revisão, a menos que o mesmo pedido marque como revisado.
+  app.patch<{ Params: { id: string }; Body: { translatedText?: string; reviewed?: boolean } }>(
+    '/api/v1/blocks/:id',
+    async (req, reply) => {
+      const block = await ctx.prisma.documentBlock.findFirst({
+        where: { id: req.params.id, project: projectScope(actorOf(req)) },
+      });
+      if (!block) return reply.code(404).send({ error: 'Parágrafo não encontrado' });
+      const { translatedText, reviewed } = req.body ?? {};
+      if (translatedText !== undefined && typeof translatedText !== 'string') {
+        return reply.code(400).send({ error: 'translatedText deve ser texto' });
+      }
+      const reviewedAt =
+        reviewed === true ? new Date() : reviewed === false || translatedText !== undefined ? null : undefined;
+      return ctx.prisma.documentBlock.update({
+        where: { id: block.id },
+        data: { translatedText, reviewedAt },
+      });
+    },
+  );
+
   // --- Pipeline run -------------------------------------------------------
 
-  app.post<{
-    Params: { id: string };
-    Body:
-      | {
-          ocrProviderId?: string;
-          translationProviderId?: string;
-          renderProviderId?: string;
-          preserveManual?: boolean;
-          /** Só DOCUMENT: refaz também os parágrafos já traduzidos. */
-          retranslate?: boolean;
-        }
-      | undefined;
-  }>('/api/v1/projects/:id/run', async (req, reply) => {
-    const project = await scopedProject(actorOf(req), req.params.id);
-    if (!project) return reply.code(404).send({ error: 'Projeto não encontrado' });
-
-    const ocrProviderId =
-      req.body?.ocrProviderId ?? (await defaultProviderFor('ocr', 'tesseract-ocr'));
-    const translationProviderId =
-      req.body?.translationProviderId ??
-      (await defaultProviderFor('translation', 'libretranslate'));
-
-    // Documento: um job de tradução por arquivo, sobre os parágrafos extraídos.
-    if (project.kind === 'DOCUMENT') {
-      const files = await ctx.prisma.sourceFile.findMany({
-        where: { projectId: project.id, documentBlocks: { some: {} } },
-        select: { id: true },
-        orderBy: { createdAt: 'asc' },
-      });
-      if (files.length === 0) {
-        return reply
-          .code(400)
-          .send({ error: 'Nenhum texto extraído ainda — envie um arquivo e aguarde a extração' });
-      }
-      await ctx.prisma.project.update({
-        where: { id: project.id },
-        data: { status: 'PROCESSING' },
-      });
-      const jobIds: string[] = [];
-      for (const file of files) {
-        const job = await ctx.prisma.job.create({
-          data: { projectId: project.id, type: 'translation', status: 'queued' },
-        });
-        await queue.add(
-          'translate-doc',
-          {
-            kind: 'translate-doc',
-            jobId: job.id,
-            projectId: project.id,
-            sourceFileId: file.id,
-            sourceLanguage: project.sourceLanguage,
-            targetLanguage: project.targetLanguage,
-            translationProviderId,
-            retranslate: req.body?.retranslate ?? false,
-          },
-          { attempts: 3, backoff: { type: 'exponential', delay: 2000 } },
-        );
-        jobIds.push(job.id);
-      }
-      return reply.code(202).send({ jobIds });
-    }
-
-    const pages = await ctx.prisma.page.findMany({
-      where: { projectId: project.id },
-      orderBy: { order: 'asc' },
-    });
-    if (pages.length === 0) return reply.code(400).send({ error: 'Projeto sem páginas' });
-
-    await ctx.prisma.project.update({
-      where: { id: project.id },
-      data: { status: 'PROCESSING' },
-    });
-
-    const renderProviderId =
-      req.body?.renderProviderId ?? (await defaultProviderFor('render', 'canvas-render'));
-    const jobIds: string[] = [];
-    for (const page of pages) {
-      const job = await ctx.prisma.job.create({
-        data: { projectId: project.id, pageId: page.id, type: 'ocr', status: 'queued' },
-      });
-      await queue.add(
-        'page',
-        {
-          kind: 'page',
-          jobId: job.id,
-          projectId: project.id,
-          pageId: page.id,
-          sourceLanguage: project.sourceLanguage,
-          targetLanguage: project.targetLanguage,
-          ocrProviderId,
-          translationProviderId,
-          renderProviderId,
-          // Default: preservar marcações manuais do usuário
-          preserveManual: req.body?.preserveManual ?? true,
-        },
-        { attempts: 3, backoff: { type: 'exponential', delay: 2000 } },
-      );
-      jobIds.push(job.id);
-    }
-
-    return reply.code(202).send({ jobIds });
-  });
+  app.post<{ Params: { id: string }; Body: RunOptions | undefined }>(
+    '/api/v1/projects/:id/run',
+    async (req, reply) => {
+      const project = await scopedProject(actorOf(req), req.params.id);
+      if (!project) return reply.code(404).send({ error: 'Projeto não encontrado' });
+      const { code, body } = await enqueueRun(ctx, queue, project, req.body ?? {});
+      return reply.code(code).send(body);
+    },
+  );
 
   // --- Exportação -----------------------------------------------------------
 
@@ -555,7 +581,9 @@ export function registerRoutes(
       const project = await scopedProject(actorOf(req), req.params.id);
       if (!project) return reply.code(404).send({ error: 'Projeto não encontrado' });
       const { format } = req.body;
-      if (!EXPORT_FORMATS.has(format)) {
+      // Documento exporta texto (e o EPUB reescrito); imagem exporta páginas.
+      const allowed = project.kind === 'DOCUMENT' ? DOC_EXPORT_FORMATS : EXPORT_FORMATS;
+      if (!allowed.has(format)) {
         return reply.code(400).send({ error: `Formato inválido: ${format}` });
       }
       const job = await ctx.prisma.job.create({

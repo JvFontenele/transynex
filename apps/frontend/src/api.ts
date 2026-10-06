@@ -12,6 +12,18 @@ export interface Project {
   status: 'DRAFT' | 'PROCESSING' | 'READY' | 'ERROR';
   createdAt: string;
   _count?: { pages: number; jobs: number };
+  /** Só em GET /projects/:id */
+  sourceFiles?: SourceFile[];
+}
+
+export interface SourceFile {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  status: string;
+  /** URL assinada do arquivo original */
+  fileUrl: string | null;
 }
 
 /** Parágrafo de um projeto DOCUMENT. */
@@ -26,6 +38,10 @@ export interface DocumentBlock {
   translatedText: string | null;
   /** 'text-layer' (camada de texto do PDF) ou 'ocr' (scan). */
   origin: string;
+  /** Revisado no leitor (null = pendente; edição/re-tradução zera). */
+  reviewedAt: string | null;
+  /** EPUB: posição no livro ("capítulo:bloco"). */
+  locator: string | null;
 }
 
 export interface OcrRegion {
@@ -55,6 +71,8 @@ export interface Page {
   // URLs assinadas emitidas pelo backend (<img src> não envia Authorization)
   sourceImageUrl: string;
   renderedImageUrl: string | null;
+  /** Revisada no leitor (null = pendente; edição/re-tradução zera). */
+  reviewedAt: string | null;
   ocrRegions: OcrRegion[];
 }
 
@@ -212,6 +230,27 @@ export const api = {
     });
   },
 
+  // Envio rápido: cria o projeto a partir do arquivo e já roda o pipeline
+  quickUpload: (file: File, sourceLanguage: string, targetLanguage: string) => {
+    const form = new FormData();
+    form.append('file', file);
+    const qs = new URLSearchParams({ sourceLanguage, targetLanguage });
+    return request<{ projectId: string; kind: ProjectKind }>(`/quick?${qs}`, {
+      method: 'POST',
+      body: form,
+    });
+  },
+
+  // Chaves de API pessoais (extensão / integrações)
+  listApiKeys: () => request<ApiKey[]>('/me/api-keys'),
+  createApiKey: (name: string) =>
+    request<ApiKey & { key: string }>('/me/api-keys', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name }),
+    }),
+  deleteApiKey: (id: string) => request<void>(`/me/api-keys/${id}`, { method: 'DELETE' }),
+
   listPages: (projectId: string) => request<Page[]>(`/projects/${projectId}/pages`),
   reorderPages: (projectId: string, pageIds: string[]) =>
     request<Page[]>(`/projects/${projectId}/pages/reorder`, {
@@ -221,6 +260,18 @@ export const api = {
     }),
   getPage: (pageId: string) => request<Page>(`/pages/${pageId}`),
   renderPage: (pageId: string) => request<Page>(`/pages/${pageId}/render`, { method: 'POST' }),
+  reviewPage: (pageId: string, reviewed: boolean) =>
+    request<Page>(`/pages/${pageId}/review`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ reviewed }),
+    }),
+  updateBlock: (blockId: string, data: { translatedText?: string; reviewed?: boolean }) =>
+    request<DocumentBlock>(`/blocks/${blockId}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(data),
+    }),
 
   createRegion: (
     pageId: string,
@@ -291,6 +342,14 @@ export const api = {
   listExports: (projectId: string) =>
     request<ExportArtifact[]>(`/projects/${projectId}/exports`),
 };
+
+export interface ApiKey {
+  id: string;
+  name: string;
+  prefix: string;
+  lastUsedAt: string | null;
+  createdAt: string;
+}
 
 export interface ExportArtifact {
   id: string;

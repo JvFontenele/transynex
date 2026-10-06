@@ -66,18 +66,19 @@ export const PROVIDER_TYPE_LABELS: Record<string, string> = {
   storage: 'Armazenamento',
 };
 
-// Tom visual por status (badge). Chaves cobrem status de job e de projeto.
-export const STATUS_TONES: Record<string, string> = {
-  queued: 'bg-slate-500/15 text-slate-400',
-  active: 'bg-sky-500/15 text-sky-400',
-  completed: 'bg-emerald-500/15 text-emerald-400',
-  failed: 'bg-rose-500/15 text-rose-400',
-  retrying: 'bg-amber-500/15 text-amber-400',
-  cancelled: 'bg-slate-500/15 text-slate-500',
-  DRAFT: 'bg-slate-500/15 text-slate-400',
-  PROCESSING: 'bg-amber-500/15 text-amber-400',
-  READY: 'bg-emerald-500/15 text-emerald-400',
-  ERROR: 'bg-rose-500/15 text-rose-400',
+// Variante do Badge por status. Chaves cobrem status de job e de projeto.
+export type StatusVariant = 'secondary' | 'info' | 'success' | 'warning' | 'destructive' | 'outline';
+export const STATUS_VARIANTS: Record<string, StatusVariant> = {
+  queued: 'secondary',
+  active: 'info',
+  completed: 'success',
+  failed: 'destructive',
+  retrying: 'warning',
+  cancelled: 'outline',
+  DRAFT: 'secondary',
+  PROCESSING: 'warning',
+  READY: 'success',
+  ERROR: 'destructive',
 };
 
 export function formatBytes(bytes: number): string {

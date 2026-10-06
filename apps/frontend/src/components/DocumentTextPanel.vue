@@ -1,7 +1,19 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import type { DocumentBlock } from '../api';
-import EmptyState from '../components/EmptyState.vue';
+import { ArrowRightIcon } from '@lucide/vue';
+import type { DocumentBlock } from '@/api';
+import EmptyState from '@/components/EmptyState.vue';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
+import { Separator } from '@/components/ui/separator';
 
 // Resumo do texto extraído de um projeto DOCUMENT + prévia dos primeiros
 // parágrafos. A leitura completa fica no leitor (/projects/:id/text).
@@ -29,60 +41,55 @@ const originLabel = computed(() => {
 </script>
 
 <template>
-  <div v-if="blocks.length">
-    <div class="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2">
-      <h3 class="text-lg font-medium">Texto extraído</h3>
-      <span class="rounded-full bg-slate-500/15 px-2 py-0.5 text-[11px] text-slate-400">
-        {{ blocks.length }} parágrafo(s) · {{ pageCount }} página(s)
-      </span>
-      <span
-        class="rounded-full bg-slate-500/15 px-2 py-0.5 text-[11px] text-slate-400"
-        :title="
-          origins.has('ocr')
-            ? 'O PDF não tinha camada de texto: o texto veio do OCR das páginas rasterizadas'
-            : 'Texto lido direto do PDF, sem OCR'
-        "
-      >
-        {{ originLabel }}
-      </span>
-      <span
-        class="rounded-full px-2 py-0.5 text-[11px]"
-        :class="
-          translatedCount === blocks.length
-            ? 'bg-emerald-500/15 text-emerald-400'
-            : 'bg-amber-500/15 text-amber-400'
-        "
-      >
-        {{ translatedCount }} traduzido(s)
-      </span>
-      <RouterLink
-        :to="{ name: 'document-reader', params: { id: projectId } }"
-        class="ml-auto text-xs text-sky-400 hover:underline"
-      >
-        Abrir leitura completa →
-      </RouterLink>
-    </div>
-
-    <div class="mb-8 overflow-hidden rounded-lg border border-slate-800 bg-slate-900/60">
-      <div
-        v-for="b in preview"
-        :key="b.id"
-        class="grid gap-x-6 gap-y-1 border-b border-slate-800/50 p-3 text-sm last:border-b-0 sm:grid-cols-2"
-      >
-        <p class="text-slate-500">{{ b.sourceText }}</p>
-        <p :class="b.translatedText ? 'text-slate-200' : 'italic text-slate-600'">
-          {{ b.translatedText ?? 'sem tradução ainda' }}
-        </p>
+  <Card v-if="blocks.length">
+    <CardHeader>
+      <CardTitle>Texto extraído</CardTitle>
+      <div class="flex flex-wrap gap-1.5">
+        <Badge variant="secondary">{{ blocks.length }} parágrafo(s) · {{ pageCount }} página(s)</Badge>
+        <Badge
+          variant="secondary"
+          :title="
+            origins.has('ocr')
+              ? 'O PDF não tinha camada de texto: o texto veio do OCR das páginas rasterizadas'
+              : 'Texto lido direto do PDF, sem OCR'
+          "
+        >
+          {{ originLabel }}
+        </Badge>
+        <Badge :variant="translatedCount === blocks.length ? 'success' : 'warning'">
+          {{ translatedCount }} traduzido(s)
+        </Badge>
       </div>
-      <RouterLink
-        v-if="rest > 0"
-        :to="{ name: 'document-reader', params: { id: projectId } }"
-        class="block bg-slate-950/40 p-3 text-center text-xs text-sky-400 hover:underline"
-      >
-        …e mais {{ rest }} parágrafo(s) — ler tudo
-      </RouterLink>
-    </div>
-  </div>
+      <CardAction>
+        <Button variant="outline" size="sm" as-child>
+          <RouterLink :to="{ name: 'document-reader', params: { id: projectId } }">
+            Abrir leitura completa
+            <ArrowRightIcon data-icon="inline-end" />
+          </RouterLink>
+        </Button>
+      </CardAction>
+    </CardHeader>
+
+    <CardContent class="flex flex-col">
+      <template v-for="(b, i) in preview" :key="b.id">
+        <Separator v-if="i > 0" />
+        <div class="grid gap-x-6 gap-y-1 py-3 sm:grid-cols-2">
+          <p class="text-muted-foreground">{{ b.sourceText }}</p>
+          <p :class="b.translatedText ? '' : 'italic text-muted-foreground'">
+            {{ b.translatedText ?? 'sem tradução ainda' }}
+          </p>
+        </div>
+      </template>
+    </CardContent>
+
+    <CardFooter v-if="rest > 0" class="justify-center">
+      <Button variant="link" size="sm" as-child>
+        <RouterLink :to="{ name: 'document-reader', params: { id: projectId } }">
+          …e mais {{ rest }} parágrafo(s) — ler tudo
+        </RouterLink>
+      </Button>
+    </CardFooter>
+  </Card>
 
   <EmptyState
     v-else-if="!loading"

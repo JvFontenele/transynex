@@ -21,6 +21,20 @@ model User {
   createdAt    DateTime @default(now())
 
   projects Project[]
+  apiKeys  ApiKey[]
+}
+
+// Chave pessoal para clientes externos (extensão, scripts): enviada como
+// `Authorization: Bearer tsx_...`. Só o sha256 é guardado.
+model ApiKey {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name       String
+  prefix     String
+  hash       String    @unique
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
 }
 
 enum ProjectStatus {
@@ -82,6 +96,9 @@ model Page {
   sourceImageRef    String
   inpaintedImageRef String?
   renderedImageRef  String? // null = página "suja", precisa re-render
+  /// Revisão no leitor: preenchido quando o usuário marca a página como
+  /// revisada; qualquer edição ou re-tradução volta para null.
+  reviewedAt        DateTime?
 
   ocrRegions OcrRegion[]
 
@@ -118,8 +135,12 @@ model DocumentBlock {
   order          Int
   sourceText     String
   translatedText String?
-  /// De onde saiu o texto: "text-layer" (pdftotext) ou "ocr" (PDF escaneado)
+  /// De onde saiu o texto: "text-layer" (pdftotext), "ocr" (PDF escaneado) ou "epub"
   origin         String     @default("text-layer")
+  /// EPUB: posição no XHTML ("capítulo:bloco") para reescrever/ler o livro
+  locator        String?
+  /// Revisão no leitor (null = não revisado; edição/re-tradução zera)
+  reviewedAt     DateTime?
 
   @@index([projectId, order])
   @@index([sourceFileId])

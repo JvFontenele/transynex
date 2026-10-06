@@ -169,7 +169,8 @@ export type ExportFormat =
   | 'markdown'
   | 'txt'
   | 'cbz'
-  | 'zip';
+  | 'zip'
+  | 'epub';
 
 export interface ExportPageInput {
   pageId: string;

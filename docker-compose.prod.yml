@@ -29,6 +29,15 @@ services:
     volumes:
       - libretranslate-data:/home/libretranslate/.local
 
+  paddle-ocr:
+    build: services/paddle-ocr
+    environment:
+      # Idiomas (códigos do PaddleOCR) baixados/carregados na subida
+      PADDLE_OCR_PRELOAD: ${PADDLE_OCR_PRELOAD:-en,japan}
+    restart: unless-stopped
+    volumes:
+      - paddle-models:/root/.paddlex
+
   backend:
     build:
       context: .
@@ -38,6 +47,7 @@ services:
       DATABASE_URL: postgresql://transynex:${POSTGRES_PASSWORD}@postgres:5432/transynex
       REDIS_URL: redis://redis:6379
       LIBRETRANSLATE_URL: http://libretranslate:5000
+      PADDLE_OCR_URL: http://paddle-ocr:8866
       TRANSYNEX_STORAGE_DIR: /data/storage
       TRANSYNEX_MODELS_DIR: /data/models/tesseract
       JWT_SECRET: ${JWT_SECRET:?defina JWT_SECRET no .env.prod}
@@ -65,6 +75,7 @@ services:
       - backend
 
 volumes:
+  paddle-models:
   postgres-data:
   redis-data:
   libretranslate-data:

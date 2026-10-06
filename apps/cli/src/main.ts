@@ -53,6 +53,7 @@ const providerConfigs: Record<string, Record<string, unknown>> = {
     languages: values.from ? [values.from] : undefined,
     cachePath: process.env.TRANSYNEX_MODELS_DIR ?? './models/tesseract',
   },
+  'paddle-ocr': { url: process.env.PADDLE_OCR_URL },
   'ollama-translation': {
     baseUrl: process.env.OLLAMA_URL,
     model: process.env.OLLAMA_MODEL,
