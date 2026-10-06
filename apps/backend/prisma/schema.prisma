@@ -100,7 +100,9 @@ model Page {
   /// revisada; qualquer edição ou re-tradução volta para null.
   reviewedAt        DateTime?
 
-  ocrRegions OcrRegion[]
+  ocrRegions     OcrRegion[]
+  /// Projeto DOCUMENT: imagem embutida no texto (bloco-imagem do leitor)
+  documentBlocks DocumentBlock[]
 
   @@index([projectId, order])
 }
@@ -141,6 +143,10 @@ model DocumentBlock {
   locator        String?
   /// Revisão no leitor (null = não revisado; edição/re-tradução zera)
   reviewedAt     DateTime?
+  /// Bloco-imagem: imagem embutida no PDF (sourceText vazio). A Page dá o
+  /// OCR → tradução → render do fluxo de imagem de graça.
+  pageId         String?
+  page           Page?      @relation(fields: [pageId], references: [id], onDelete: Cascade)
 
   @@index([projectId, order])
   @@index([sourceFileId])

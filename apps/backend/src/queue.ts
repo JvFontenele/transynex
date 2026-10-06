@@ -17,6 +17,7 @@ import {
   extractPdfParagraphs,
   paragraphsFromLines,
   type DocumentPage,
+  type SaveImage,
 } from './document.js';
 import { buildTranslatedEpub, extractEpubParagraphs } from './epub.js';
 import { enqueueRun, EPUB_MIME, type RunOptions } from './pipeline.js';
@@ -360,7 +361,17 @@ export function createWorker(
       where: { id: sourceFileId },
     });
     // Idempotente: um retry (ou re-extração) refaz os parágrafos do arquivo.
+    // As Pages das imagens embutidas saem junto (cascade apaga os blocos);
+    // as de scan não têm bloco e são reaproveitadas pelo OCR.
+    await ctx.prisma.page.deleteMany({ where: { sourceFileId, documentBlocks: { some: {} } } });
     await ctx.prisma.documentBlock.deleteMany({ where: { sourceFileId } });
+
+    let imageCount = 0;
+    const saveImage: SaveImage = async ({ buffer, ext }) => {
+      const ref = `projects/${projectId}/doc-images/${sourceFileId}-${imageCount++}${ext}`;
+      await ctx.storage.save(ref, buffer);
+      return ref;
+    };
 
     const buffer = await ctx.storage.read(sourceFile.fileRef);
     let origin = sourceFile.mimeType === EPUB_MIME ? 'epub' : 'text-layer';
@@ -368,7 +379,7 @@ export function createWorker(
       sourceFile.mimeType === EPUB_MIME
         ? extractEpubParagraphs(buffer)
         : sourceFile.mimeType === 'application/pdf'
-          ? await extractPdfParagraphs(buffer)
+          ? await extractPdfParagraphs(buffer, saveImage)
           : null;
     if (!pages) {
       origin = 'ocr';
@@ -382,8 +393,18 @@ export function createWorker(
         pageNumber: p.pageNumber,
         sourceText,
         locator: p.locators?.[i] ?? null,
+        imageRef: p.imageRefs?.[i],
       })),
     );
+    // Cada imagem vira uma Page: traduzi-la é o mesmo job 'page' do fluxo de HQ.
+    const pageIds = new Map<number, string>();
+    for (const [i, p] of paragraphs.entries()) {
+      if (!p.imageRef) continue;
+      const page = await ctx.prisma.page.create({
+        data: { projectId, sourceFileId, order: baseOrder + i, sourceImageRef: p.imageRef },
+      });
+      pageIds.set(i, page.id);
+    }
     await ctx.prisma.documentBlock.createMany({
       data: paragraphs.map((p, i) => ({
         projectId,
@@ -393,6 +414,7 @@ export function createWorker(
         sourceText: p.sourceText,
         locator: p.locator,
         origin,
+        pageId: pageIds.get(i) ?? null,
       })),
     });
     await ctx.prisma.sourceFile.update({
@@ -401,7 +423,7 @@ export function createWorker(
     });
 
     await autoRun(projectId, data.autoRun);
-    await complete(jobId, projectId, { sourceFileId, blocks: paragraphs.length, origin });
+    await complete(jobId, projectId, { sourceFileId, blocks: paragraphs.length, images: pageIds.size, origin });
   };
 
   const processTranslateDoc = async (data: TranslateDocJobData) => {
@@ -414,14 +436,15 @@ export function createWorker(
     );
     if (data.retranslate) {
       await ctx.prisma.documentBlock.updateMany({
-        where: { sourceFileId },
+        where: { sourceFileId, pageId: null },
         data: { translatedText: null, reviewedAt: null },
       });
     }
 
     // Só o que falta: um retry retoma de onde parou em vez de retraduzir tudo.
     const blocks = await ctx.prisma.documentBlock.findMany({
-      where: { sourceFileId, translatedText: null },
+      // Blocos-imagem (pageId) são traduzidos pelo job 'page', não aqui.
+      where: { sourceFileId, translatedText: null, pageId: null },
       orderBy: { order: 'asc' },
     });
 
@@ -481,8 +504,10 @@ export function createWorker(
   // e EPUB = livro original reescrito com as traduções.
   const processExportDocument = async (data: ExportJobData) => {
     const { jobId, projectId, format } = data;
+    // ponytail: TXT/Markdown levam só o texto; embutir as imagens pede um
+    // formato com anexos (zip/EPUB gerado).
     const blocks = await ctx.prisma.documentBlock.findMany({
-      where: { projectId },
+      where: { projectId, pageId: null },
       orderBy: { order: 'asc' },
     });
     const text = (b: (typeof blocks)[number]) => b.translatedText ?? b.sourceText;

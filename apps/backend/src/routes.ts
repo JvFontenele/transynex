@@ -583,10 +583,16 @@ export function registerRoutes(
     if (!(await scopedProject(actorOf(req), req.params.id))) {
       return reply.code(404).send({ error: 'Projeto não encontrado' });
     }
-    return ctx.prisma.documentBlock.findMany({
+    const blocks = await ctx.prisma.documentBlock.findMany({
       where: { projectId: req.params.id },
       orderBy: { order: 'asc' },
+      include: { page: { select: { id: true, sourceImageRef: true, renderedImageRef: true } } },
     });
+    // Bloco-imagem: URLs da imagem original e da traduzida (render), se houver.
+    return blocks.map(({ page, ...b }) => ({
+      ...b,
+      image: page && withImageUrls(page),
+    }));
   });
 
   // Edição/revisão de um parágrafo no leitor de documento. Editar o texto

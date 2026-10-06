@@ -41,16 +41,20 @@ const blocks = useQuery({
   queryFn: () => api.listBlocks(projectId.value),
   // Enquanto faltar tradução, provavelmente há job rodando: atualiza sozinho.
   refetchInterval: (query) =>
-    (query.state.data as DocumentBlock[] | undefined)?.some((b) => b.translatedText === null)
+    (query.state.data as DocumentBlock[] | undefined)?.some(
+      (b) => !b.image && b.translatedText === null,
+    )
       ? 5000
       : false,
 });
 
-const total = computed(() => blocks.data.value?.length ?? 0);
+// Contagens e cópia são sobre o texto; blocos-imagem só aparecem na leitura.
+const textBlocks = computed(() => blocks.data.value?.filter((b) => !b.image) ?? []);
+const total = computed(() => textBlocks.value.length);
 const translatedCount = computed(
-  () => blocks.data.value?.filter((b) => b.translatedText !== null).length ?? 0,
+  () => textBlocks.value.filter((b) => b.translatedText !== null).length,
 );
-const reviewedCount = computed(() => blocks.data.value?.filter((b) => b.reviewedAt).length ?? 0);
+const reviewedCount = computed(() => textBlocks.value.filter((b) => b.reviewedAt).length);
 
 // --- Revisão no leitor ---------------------------------------------------------
 // Clicar num parágrafo edita a tradução ali mesmo; o ✓ marca como revisado.
@@ -67,7 +71,7 @@ function replaceBlock(updated: DocumentBlock) {
   );
 }
 function startEdit(block: DocumentBlock) {
-  if (!review.value) return;
+  if (!review.value || block.image) return;
   editingId.value = block.id;
   draft.value = block.translatedText ?? '';
 }
@@ -123,7 +127,7 @@ const widthClass = computed(() => {
 // Copiar a tradução inteira: o caso de uso mais comum antes de existir export.
 const copied = ref(false);
 async function copyTranslation() {
-  const text = (blocks.data.value ?? [])
+  const text = textBlocks.value
     .map((b) => b.translatedText ?? b.sourceText)
     .join('\n\n');
   await navigator.clipboard.writeText(text);
@@ -215,8 +219,39 @@ async function copyTranslation() {
           <Separator class="flex-1" />
         </div>
 
+        <!-- Imagem embutida: a traduzida (render) quando houver -->
+        <figure
+          v-if="block.image"
+          :class="bilingual ? 'mb-5 grid items-start gap-x-8 gap-y-1 sm:grid-cols-2' : 'mb-5'"
+        >
+          <img
+            v-if="bilingual"
+            :src="block.image.sourceImageUrl"
+            alt="Imagem original"
+            loading="lazy"
+            class="max-w-full rounded-md border"
+          />
+          <img
+            v-if="!bilingual || block.image.renderedImageUrl"
+            :src="block.image.renderedImageUrl ?? block.image.sourceImageUrl"
+            :alt="block.image.renderedImageUrl ? 'Imagem traduzida' : 'Imagem do documento'"
+            loading="lazy"
+            :class="cn('max-w-full rounded-md border', !bilingual && 'mx-auto')"
+          />
+          <p v-else class="text-[15px] italic text-muted-foreground">imagem sem tradução</p>
+          <figcaption v-if="review" class="text-right sm:col-span-2">
+            <Button variant="link" size="sm" as-child>
+              <RouterLink
+                :to="{ name: 'page-editor', params: { id: projectId, pageId: block.image.id } }"
+              >
+                Editar texto da imagem
+              </RouterLink>
+            </Button>
+          </figcaption>
+        </figure>
+
         <!-- Bilíngue: original à esquerda, tradução à direita -->
-        <div :class="bilingual ? 'mb-5 grid gap-x-8 gap-y-1 sm:grid-cols-2' : 'mb-5'">
+        <div v-else :class="bilingual ? 'mb-5 grid gap-x-8 gap-y-1 sm:grid-cols-2' : 'mb-5'">
           <p v-if="bilingual" class="text-[15px] leading-relaxed text-muted-foreground">
             {{ block.sourceText }}
           </p>

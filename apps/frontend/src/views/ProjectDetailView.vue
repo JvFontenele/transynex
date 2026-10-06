@@ -131,6 +131,9 @@ const runningJobIds = ref<string[]>([]);
 const preserveManual = ref(true);
 // Documento: por padrão só traduz o que falta; marcar refaz tudo.
 const retranslate = ref(false);
+// Documento: imagens embutidas no PDF passam pelo OCR → tradução → render.
+const imageCount = computed(() => blocks.data.value?.filter((b) => b.image).length ?? 0);
+const translateImages = ref(false);
 const run = useMutation({
   mutationFn: () =>
     api.run(projectId.value, {
@@ -138,6 +141,7 @@ const run = useMutation({
       translationProviderId: translator.value,
       preserveManual: preserveManual.value,
       retranslate: retranslate.value,
+      translateImages: imageCount.value > 0 && translateImages.value,
     }),
   onSuccess: (data) => (runningJobIds.value = data.jobIds),
 });
@@ -351,7 +355,7 @@ const translatedCount = computed(
         </CardHeader>
         <CardContent>
           <FieldGroup>
-            <Field v-if="!isDocument">
+            <Field v-if="!isDocument || translateImages">
               <FieldLabel for="ocr">OCR</FieldLabel>
               <Select v-model="ocr">
                 <SelectTrigger id="ocr" class="w-full">
@@ -405,10 +409,20 @@ const translatedCount = computed(
                 Refazer traduções existentes
               </FieldLabel>
             </Field>
+            <Field
+              v-if="isDocument && imageCount > 0"
+              orientation="horizontal"
+              title="Roda OCR nas imagens do documento e desenha a tradução sobre elas, como numa página de HQ. Imagens já traduzidas só são refeitas com “Refazer traduções existentes”."
+            >
+              <Checkbox id="translate-images" v-model="translateImages" />
+              <FieldLabel for="translate-images" class="font-normal">
+                Traduzir também as imagens ({{ imageCount }})
+              </FieldLabel>
+            </Field>
             <!-- Progresso do pipeline -->
             <div v-if="running.length > 0" class="flex flex-col gap-2">
               <div class="flex justify-between text-sm text-muted-foreground">
-                <span v-if="isDocument">Traduzindo {{ running.length }} arquivo(s)…</span>
+                <span v-if="isDocument">Traduzindo {{ running.length }} item(ns)…</span>
                 <span v-else>Traduzindo {{ running.length }} página(s)…</span>
                 <span class="tabular-nums">{{ overallProgress }}%</span>
               </div>

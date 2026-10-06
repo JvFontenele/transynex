@@ -42,6 +42,8 @@ export interface DocumentBlock {
   reviewedAt: string | null;
   /** EPUB: posição no livro ("capítulo:bloco"). */
   locator: string | null;
+  /** Bloco-imagem (imagem embutida no PDF; sourceText vazio). `id` é a Page dela. */
+  image: { id: string; sourceImageUrl: string; renderedImageUrl: string | null } | null;
 }
 
 export interface OcrRegion {
@@ -322,6 +324,8 @@ export const api = {
       preserveManual?: boolean;
       // DOCUMENT: true = refaz também os parágrafos já traduzidos
       retranslate?: boolean;
+      // DOCUMENT: traduz também as imagens embutidas no texto
+      translateImages?: boolean;
     },
   ) =>
     request<{ jobIds: string[] }>(`/projects/${projectId}/run`, {

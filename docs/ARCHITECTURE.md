@@ -589,6 +589,14 @@ Decisões desse fluxo:
    chamada), com `translateBatch` — o provider decide como agrupar o contexto.
    Por padrão só os parágrafos sem tradução são enviados, então um retry retoma
    de onde parou; `retranslate: true` descarta as traduções e refaz tudo.
+6. **Imagens embutidas** (só PDF com camada de texto): `pdftohtml -xml -zoom 1`
+   lista as imagens com a posição em pontos (a mesma unidade do `-bbox-layout`)
+   e cada uma entra entre os parágrafos pela altura na página. Ícones (< 50×50pt)
+   e fundos de página inteira (scan com OCR embutido) são descartados. A imagem
+   vira um `DocumentBlock` com `sourceText` vazio e `pageId` → uma `Page`
+   comum, então traduzi-la (`run` com `translateImages: true`) é o mesmo job
+   `page` do fluxo de HQ, e o editor de regiões serve para corrigi-la.
+   TXT/Markdown exportam só o texto.
 
 Endpoints acrescentados: `POST /projects` aceita `kind`; `GET
 /projects/:id/blocks` devolve os parágrafos na ordem de leitura; `POST

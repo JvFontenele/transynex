@@ -26,6 +26,8 @@ export interface RunOptions {
   preserveManual?: boolean;
   /** Só DOCUMENT: refaz também os parágrafos já traduzidos. */
   retranslate?: boolean;
+  /** Só DOCUMENT: traduz também as imagens embutidas (OCR → tradução → render). */
+  translateImages?: boolean;
 }
 
 export interface UploadedFile {
@@ -146,10 +148,42 @@ export async function enqueueRun(
     opts.translationProviderId ??
     (await defaultProviderFor(ctx, 'translation', 'libretranslate'));
 
+  // Página → job 'page' (OCR → tradução → render). Serve as páginas de HQ e
+  // as imagens embutidas de um documento.
+  const enqueuePages = async (pages: { id: string }[]): Promise<string[]> => {
+    const renderProviderId =
+      opts.renderProviderId ?? (await defaultProviderFor(ctx, 'render', 'canvas-render'));
+    const jobIds: string[] = [];
+    for (const page of pages) {
+      const job = await ctx.prisma.job.create({
+        data: { projectId: project.id, pageId: page.id, type: 'ocr', status: 'queued' },
+      });
+      await queue.add(
+        'page',
+        {
+          kind: 'page',
+          jobId: job.id,
+          projectId: project.id,
+          pageId: page.id,
+          sourceLanguage: project.sourceLanguage,
+          targetLanguage: project.targetLanguage,
+          ocrProviderId,
+          translationProviderId,
+          renderProviderId,
+          // Default: preservar marcações manuais do usuário
+          preserveManual: opts.preserveManual ?? true,
+        },
+        { attempts: 3, backoff: { type: 'exponential', delay: 2000 } },
+      );
+      jobIds.push(job.id);
+    }
+    return jobIds;
+  };
+
   // Documento: um job de tradução por arquivo, sobre os parágrafos extraídos.
   if (project.kind === 'DOCUMENT') {
     const files = await ctx.prisma.sourceFile.findMany({
-      where: { projectId: project.id, documentBlocks: { some: {} } },
+      where: { projectId: project.id, documentBlocks: { some: { pageId: null } } },
       select: { id: true },
       orderBy: { createdAt: 'asc' },
     });
@@ -181,6 +215,20 @@ export async function enqueueRun(
       );
       jobIds.push(job.id);
     }
+    if (opts.translateImages) {
+      // Como no texto: sem `retranslate`, só as imagens ainda não traduzidas.
+      // ponytail: imagem sem texto nunca ganha render e é reanalisada a cada run.
+      const imagePages = await ctx.prisma.page.findMany({
+        where: {
+          projectId: project.id,
+          documentBlocks: { some: {} },
+          ...(opts.retranslate ? {} : { renderedImageRef: null }),
+        },
+        select: { id: true },
+        orderBy: { order: 'asc' },
+      });
+      jobIds.push(...(await enqueuePages(imagePages)));
+    }
     return { code: 202, body: { jobIds } };
   }
 
@@ -191,32 +239,5 @@ export async function enqueueRun(
   if (pages.length === 0) return { code: 400, body: { error: 'Projeto sem páginas' } };
 
   await ctx.prisma.project.update({ where: { id: project.id }, data: { status: 'PROCESSING' } });
-
-  const renderProviderId =
-    opts.renderProviderId ?? (await defaultProviderFor(ctx, 'render', 'canvas-render'));
-  const jobIds: string[] = [];
-  for (const page of pages) {
-    const job = await ctx.prisma.job.create({
-      data: { projectId: project.id, pageId: page.id, type: 'ocr', status: 'queued' },
-    });
-    await queue.add(
-      'page',
-      {
-        kind: 'page',
-        jobId: job.id,
-        projectId: project.id,
-        pageId: page.id,
-        sourceLanguage: project.sourceLanguage,
-        targetLanguage: project.targetLanguage,
-        ocrProviderId,
-        translationProviderId,
-        renderProviderId,
-        // Default: preservar marcações manuais do usuário
-        preserveManual: opts.preserveManual ?? true,
-      },
-      { attempts: 3, backoff: { type: 'exponential', delay: 2000 } },
-    );
-    jobIds.push(job.id);
-  }
-  return { code: 202, body: { jobIds } };
+  return { code: 202, body: { jobIds: await enqueuePages(pages) } };
 }

@@ -90,7 +90,8 @@ const recentProjects = computed(() => projects.data.value?.slice(0, 5) ?? []);
                   <p class="truncate font-medium">{{ p.name }}</p>
                   <p class="text-xs text-muted-foreground">
                     {{ languageName(p.sourceLanguage) }} → {{ languageName(p.targetLanguage) }} ·
-                    {{ p._count?.pages ?? 0 }} página(s) · {{ timeAgo(p.createdAt) }}
+                    <template v-if="p.kind !== 'DOCUMENT'">{{ p._count?.pages ?? 0 }} página(s) · </template>
+                    {{ timeAgo(p.createdAt) }}
                   </p>
                 </div>
                 <StatusBadge :status="p.status" />
