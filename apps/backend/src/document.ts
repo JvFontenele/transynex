@@ -1,10 +1,9 @@
-import { execFile } from 'node:child_process';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { promisify } from 'node:util';
-
-const execFileAsync = promisify(execFile);
+import readline from 'node:readline';
 
 /** Página do documento com seus parágrafos já reconstruídos. */
 export interface DocumentPage {
@@ -40,14 +39,15 @@ export async function extractPdfParagraphs(buffer: Buffer): Promise<DocumentPage
   try {
     const pdfPath = path.join(dir, 'input.pdf');
     await fs.writeFile(pdfPath, buffer);
-    const { stdout } = await execFileAsync(
-      'pdftotext',
-      ['-bbox-layout', pdfPath, '-'],
-      // Documentos longos passam fácil do maxBuffer default (1 MB)
-      { maxBuffer: 256 * 1024 * 1024 },
-    );
-
-    const pages = parseBboxLayout(stdout);
+    // Lido em streaming: o XHTML do -bbox-layout tem uma tag por linha e, num
+    // livro grande, passa de centenas de MB — nunca vira uma string só.
+    const child = spawn('pdftotext', ['-bbox-layout', pdfPath, '-'], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const exited = once(child, 'close');
+    const pages = await parseBboxLayout(readline.createInterface({ input: child.stdout }));
+    const [code] = await exited;
+    if (code !== 0) throw new Error(`pdftotext saiu com código ${code}`);
     if (pages.length === 0) return null;
 
     // Um scan pode ter texto residual (marca d'água, cabeçalho carimbado) em
@@ -68,35 +68,37 @@ export async function extractPdfParagraphs(buffer: Buffer): Promise<DocumentPage
 // ignorado. Evita uma dependência de parser XML para uma estrutura tão fixa.
 const BBOX_TOKEN = /<page\b|<block\b|<line\b([^>]*)>|<word\b[^>]*>([\s\S]*?)<\/word>/g;
 
-function parseBboxLayout(xml: string): DocumentPage[] {
+async function parseBboxLayout(lines: AsyncIterable<string>): Promise<DocumentPage[]> {
   const pages: DocumentPage[] = [];
-  let lines: TextLine[] = [];
+  let blockLines: TextLine[] = [];
   let current: TextLine | null = null;
 
   // Um bloco do poppler já é um candidato a parágrafo, mas pode conter vários
   // (quando o espaçamento é apertado): a fronteira de bloco força o corte e a
   // geometria das linhas corta o que sobrar dentro dele.
   const flushBlock = () => {
-    if (lines.length === 0) return;
+    if (blockLines.length === 0) return;
     const page = pages.at(-1);
-    if (page) page.paragraphs.push(...paragraphsFromLines(lines));
-    lines = [];
+    if (page) page.paragraphs.push(...paragraphsFromLines(blockLines));
+    blockLines = [];
     current = null;
   };
 
-  for (const match of xml.matchAll(BBOX_TOKEN)) {
-    const [tag, lineAttrs, word] = match;
-    if (tag.startsWith('<page')) {
-      flushBlock();
-      pages.push({ pageNumber: pages.length + 1, paragraphs: [] });
-    } else if (tag.startsWith('<block')) {
-      flushBlock();
-    } else if (lineAttrs !== undefined) {
-      current = { text: '', boundingBox: boxFromAttrs(lineAttrs) };
-      lines.push(current);
-    } else if (word !== undefined && current) {
-      const text = decodeEntities(word);
-      current.text = current.text ? `${current.text} ${text}` : text;
+  for await (const xmlLine of lines) {
+    for (const match of xmlLine.matchAll(BBOX_TOKEN)) {
+      const [tag, lineAttrs, word] = match;
+      if (tag.startsWith('<page')) {
+        flushBlock();
+        pages.push({ pageNumber: pages.length + 1, paragraphs: [] });
+      } else if (tag.startsWith('<block')) {
+        flushBlock();
+      } else if (lineAttrs !== undefined) {
+        current = { text: '', boundingBox: boxFromAttrs(lineAttrs) };
+        blockLines.push(current);
+      } else if (word !== undefined && current) {
+        const text = decodeEntities(word);
+        current.text = current.text ? `${current.text} ${text}` : text;
+      }
     }
   }
   flushBlock();

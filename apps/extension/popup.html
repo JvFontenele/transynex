@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: light dark; font: 15px/1.4 system-ui, sans-serif; }
+  body { margin: 0; padding: 16px; min-width: 280px; display: grid; gap: 12px; }
+  label { display: grid; gap: 4px; font-size: 13px; opacity: .85; }
+  input, button { font: inherit; padding: 10px 12px; border-radius: 8px; border: 1px solid #8886; }
+  button { font-weight: 600; cursor: pointer; }
+  .primary { background: #18181b; color: #fafafa; border-color: #18181b; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  #status { margin: 0; font-size: 13px; color: #e11d48; }
+  #status:empty { display: none; }
+</style>
+</head>
+<body>
+  <button id="grant" class="primary" hidden>Permitir acesso aos sites</button>
+  <button id="all" class="primary">Traduzir imagens da página</button>
+  <button id="pick">Tocar para traduzir</button>
+  <p id="status"></p>
+  <div class="row">
+    <label>De <input id="source" list="langs"></label>
+    <label>Para <input id="target" list="langs"></label>
+  </div>
+  <label>Servidor <input id="server" type="url" placeholder="https://transynex.exemplo.com"></label>
+  <label>Chave de API <input id="apiKey" type="password" placeholder="tsx_…" autocomplete="off"></label>
+  <datalist id="langs">
+    <option value="ja">Japonês</option><option value="en">Inglês</option>
+    <option value="pt-BR">Português (Brasil)</option><option value="pt-PT">Português (Portugal)</option>
+    <option value="es">Espanhol</option><option value="zh">Chinês</option><option value="ko">Coreano</option>
+    <option value="fr">Francês</option><option value="de">Alemão</option><option value="it">Italiano</option>
+    <option value="ru">Russo</option>
+  </datalist>
+  <script src="popup.js"></script>
+</body>
+</html>

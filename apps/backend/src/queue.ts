@@ -269,6 +269,22 @@ export function createWorker(
     await complete(jobId, data.projectId, { pageId, regions: allRegions.length });
   };
 
+  // Salva cada página assim que é extraída (o arquivo nunca fica inteiro na memória).
+  const extractToPages = async (
+    sourceFile: { id: string; projectId: string; mimeType: string },
+    buffer: Buffer,
+  ): Promise<number> => {
+    const { id: sourceFileId, projectId } = sourceFile;
+    const baseOrder = await ctx.prisma.page.count({ where: { projectId } });
+    return extractPages(buffer, sourceFile.mimeType, async (page, i) => {
+      const pageRef = `projects/${projectId}/pages/${sourceFileId}-${i}${page.ext}`;
+      await ctx.storage.save(pageRef, page.buffer);
+      await ctx.prisma.page.create({
+        data: { projectId, sourceFileId, order: baseOrder + i, sourceImageRef: pageRef },
+      });
+    });
+  };
+
   const processExtract = async (data: ExtractJobData) => {
     const { jobId, projectId, sourceFileId } = data;
     await setProgress(jobId, 0);
@@ -276,30 +292,17 @@ export function createWorker(
     const sourceFile = await ctx.prisma.sourceFile.findUniqueOrThrow({
       where: { id: sourceFileId },
     });
-    const buffer = await ctx.storage.read(sourceFile.fileRef);
-    const extracted = await extractPages(buffer, sourceFile.mimeType);
-    await setProgress(jobId, 50);
-
-    const baseOrder = await ctx.prisma.page.count({ where: { projectId } });
-    for (const [i, page] of extracted.entries()) {
-      const pageRef = `projects/${projectId}/pages/${sourceFileId}-${i}${page.ext}`;
-      await ctx.storage.save(pageRef, page.buffer);
-      await ctx.prisma.page.create({
-        data: {
-          projectId,
-          sourceFileId,
-          order: baseOrder + i,
-          sourceImageRef: pageRef,
-        },
-      });
-    }
+    const pageCount = await extractToPages(
+      sourceFile,
+      await ctx.storage.read(sourceFile.fileRef),
+    );
     await ctx.prisma.sourceFile.update({
       where: { id: sourceFileId },
       data: { status: 'extracted' },
     });
 
     await autoRun(projectId, data.autoRun);
-    await complete(jobId, projectId, { sourceFileId, pages: extracted.length });
+    await complete(jobId, projectId, { sourceFileId, pages: pageCount });
   };
 
   // --- Fluxo DOCUMENT (texto corrido) -------------------------------------
@@ -320,20 +323,7 @@ export function createWorker(
     });
 
     if (pages.length === 0) {
-      const extracted = await extractPages(buffer, sourceFile.mimeType);
-      const baseOrder = await ctx.prisma.page.count({ where: { projectId: sourceFile.projectId } });
-      for (const [i, page] of extracted.entries()) {
-        const pageRef = `projects/${sourceFile.projectId}/pages/${sourceFile.id}-${i}${page.ext}`;
-        await ctx.storage.save(pageRef, page.buffer);
-        await ctx.prisma.page.create({
-          data: {
-            projectId: sourceFile.projectId,
-            sourceFileId: sourceFile.id,
-            order: baseOrder + i,
-            sourceImageRef: pageRef,
-          },
-        });
-      }
+      await extractToPages(sourceFile, buffer);
       pages = await ctx.prisma.page.findMany({
         where: { sourceFileId: sourceFile.id },
         orderBy: { order: 'asc' },
