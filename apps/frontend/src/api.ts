@@ -241,6 +241,17 @@ export const api = {
     });
   },
 
+  // Mesmo envio rápido, mas o backend baixa o arquivo da URL (ex: Cloudreve).
+  // run=false só cria o projeto.
+  quickImport: (url: string, filename: string, sourceLanguage: string, targetLanguage: string, run: boolean) => {
+    const qs = new URLSearchParams({ sourceLanguage, targetLanguage, run: run ? '1' : '0' });
+    return request<{ projectId: string; kind: ProjectKind }>(`/quick?${qs}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ url, filename }),
+    });
+  },
+
   // Chaves de API pessoais (extensão / integrações)
   listApiKeys: () => request<ApiKey[]>('/me/api-keys'),
   createApiKey: (name: string) =>

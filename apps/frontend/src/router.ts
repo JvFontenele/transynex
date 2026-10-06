@@ -57,6 +57,13 @@ export const router = createRouter({
       meta: { title: 'Editor de página', wide: true },
     },
     {
+      // Entrada de apps externos (app de arquivo do Cloudreve): ?src=<url>&name=<arquivo>
+      path: '/import',
+      name: 'import',
+      component: () => import('./views/ImportView.vue'),
+      meta: { title: 'Importar arquivo' },
+    },
+    {
       path: '/account',
       name: 'account',
       component: () => import('./views/AccountView.vue'),

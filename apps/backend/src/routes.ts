@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import sharp from 'sharp';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { Queue } from 'bullmq';
 import type {
   ExportFormat,
@@ -22,10 +22,67 @@ import {
   ingestFile,
   isSupportedMime,
   type RunOptions,
+  type UploadedFile,
 } from './pipeline.js';
 
 const EXPORT_FORMATS = new Set<string>(['pdf', 'cbz', 'zip', 'txt', 'markdown']);
 const DOC_EXPORT_FORMATS = new Set<string>(['txt', 'markdown', 'epub']);
+
+// Importação por URL (ex: app de arquivo do Cloudreve): o backend só baixa de
+// origens listadas em IMPORT_ORIGINS — lista fechada evita SSRF.
+const IMPORT_ORIGINS = (process.env.IMPORT_ORIGINS ?? '')
+  .split(',')
+  .map((o) => o.trim().replace(/\/+$/, ''))
+  .filter(Boolean);
+const MAX_IMPORT_BYTES = 100 * 1024 * 1024; // mesmo limite do multipart (main.ts)
+// Servidores de arquivo costumam mandar application/octet-stream: a extensão manda.
+const MIME_BY_EXT: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.tif': 'image/tiff',
+  '.tiff': 'image/tiff',
+  '.pdf': 'application/pdf',
+  '.zip': 'application/zip',
+  '.cbz': 'application/x-cbz',
+  '.epub': EPUB_MIME,
+};
+
+/** Arquivo do multipart (`file`) ou, em JSON `{ url, filename? }`, baixado da URL. */
+async function readUpload(
+  req: FastifyRequest,
+): Promise<{ file: UploadedFile } | { code: number; error: string }> {
+  if (req.isMultipart()) {
+    const file = await req.file();
+    if (!file) return { code: 400, error: 'Nenhum arquivo enviado' };
+    // Clientes genéricos (ex: tarefa do Cloudreve) mandam application/octet-stream
+    const mimetype = isSupportedMime(file.mimetype)
+      ? file.mimetype
+      : (MIME_BY_EXT[path.extname(file.filename).toLowerCase()] ?? file.mimetype);
+    return { file: { filename: file.filename, mimetype, buffer: await file.toBuffer() } };
+  }
+  const { url, filename } = (req.body ?? {}) as { url?: string; filename?: string };
+  if (!url) return { code: 400, error: 'Nenhum arquivo enviado' };
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { code: 400, error: 'URL inválida' };
+  }
+  if (!IMPORT_ORIGINS.includes(parsed.origin)) {
+    return { code: 403, error: `Origem não liberada (IMPORT_ORIGINS): ${parsed.origin}` };
+  }
+  const res = await fetch(parsed).catch(() => null);
+  if (!res?.ok) return { code: 502, error: `Falha ao baixar o arquivo (${res ? `HTTP ${res.status}` : 'sem resposta'})` };
+  if (Number(res.headers.get('content-length')) > MAX_IMPORT_BYTES) {
+    return { code: 413, error: 'Arquivo maior que 100 MB' };
+  }
+  const name = filename || decodeURIComponent(parsed.pathname.split('/').pop() || 'arquivo');
+  const mimetype =
+    MIME_BY_EXT[path.extname(name).toLowerCase()] ?? res.headers.get('content-type')?.split(';')[0] ?? '';
+  return { file: { filename: name, mimetype, buffer: Buffer.from(await res.arrayBuffer()) } };
+}
 
 export function registerRoutes(
   app: FastifyInstance,
@@ -110,16 +167,9 @@ export function registerRoutes(
     const project = await scopedProject(actorOf(req), req.params.id);
     if (!project) return reply.code(404).send({ error: 'Projeto não encontrado' });
 
-    const file = await req.file();
-    if (!file) return reply.code(400).send({ error: 'Nenhum arquivo enviado' });
-    if (!isSupportedMime(file.mimetype)) {
-      return reply.code(415).send({ error: `Tipo não suportado: ${file.mimetype}` });
-    }
-    const { code, body } = await ingestFile(ctx, queue, project, {
-      filename: file.filename,
-      mimetype: file.mimetype,
-      buffer: await file.toBuffer(),
-    });
+    const upload = await readUpload(req);
+    if ('error' in upload) return reply.code(upload.code).send({ error: upload.error });
+    const { code, body } = await ingestFile(ctx, queue, project, upload.file);
     return reply.code(code).send(body);
   });
 
@@ -127,19 +177,26 @@ export function registerRoutes(
   // Um arquivo, sem criar projeto antes: o projeto é criado implicitamente
   // (nome = arquivo), recebe o upload e roda o pipeline sozinho.
   // Idiomas e kind vão na query para não depender da ordem dos campos multipart.
+  // `run=0` só cria o projeto, sem traduzir.
 
   app.post<{
-    Querystring: { sourceLanguage?: string; targetLanguage?: string; kind?: 'IMAGE' | 'DOCUMENT' } & RunOptions;
+    Querystring: {
+      sourceLanguage?: string;
+      targetLanguage?: string;
+      kind?: 'IMAGE' | 'DOCUMENT';
+      run?: string;
+    } & RunOptions;
   }>('/api/v1/quick', async (req, reply) => {
-    const { sourceLanguage, targetLanguage, kind: forcedKind, ...runOptions } = req.query;
+    const { sourceLanguage, targetLanguage, kind: forcedKind, run, ...runOptions } = req.query;
     if (!sourceLanguage || !targetLanguage) {
       return reply.code(400).send({ error: 'sourceLanguage e targetLanguage são obrigatórios' });
     }
     if (forcedKind !== undefined && forcedKind !== 'IMAGE' && forcedKind !== 'DOCUMENT') {
       return reply.code(400).send({ error: `kind inválido: ${forcedKind}` });
     }
-    const file = await req.file();
-    if (!file) return reply.code(400).send({ error: 'Nenhum arquivo enviado' });
+    const upload = await readUpload(req);
+    if ('error' in upload) return reply.code(upload.code).send({ error: upload.error });
+    const { file } = upload;
     if (!isSupportedMime(file.mimetype)) {
       return reply.code(415).send({ error: `Tipo não suportado: ${file.mimetype}` });
     }
@@ -147,7 +204,6 @@ export function registerRoutes(
     const kind: 'IMAGE' | 'DOCUMENT' =
       forcedKind ??
       (file.mimetype === 'application/pdf' || file.mimetype === EPUB_MIME ? 'DOCUMENT' : 'IMAGE');
-    const buffer = await file.toBuffer();
     const project = await ctx.prisma.project.create({
       data: {
         name: path.parse(file.filename).name || file.filename,
@@ -157,13 +213,7 @@ export function registerRoutes(
         ownerId: actorOf(req).sub,
       },
     });
-    const { code, body } = await ingestFile(
-      ctx,
-      queue,
-      project,
-      { filename: file.filename, mimetype: file.mimetype, buffer },
-      runOptions,
-    );
+    const { code, body } = await ingestFile(ctx, queue, project, file, run === '0' ? undefined : runOptions);
     if (code >= 400) {
       await ctx.prisma.project.delete({ where: { id: project.id } });
       return reply.code(code).send(body);

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useQueryClient } from '@tanstack/vue-query';
 import { ArrowRightIcon, UploadIcon } from '@lucide/vue';
@@ -10,30 +10,13 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Field, FieldLabel } from '@/components/ui/field';
 import { Spinner } from '@/components/ui/spinner';
-import { cn } from '@/lib/utils';
+import { cn, useStoredLangs } from '@/lib/utils';
 
 // Envio rápido: um arquivo vira um projeto implícito e já entra na fila.
 const router = useRouter();
 const queryClient = useQueryClient();
 
-// Último par de idiomas usado fica salvo (conveniência por navegador).
-const LANGS_KEY = 'quick-langs';
-function loadLangs(): { from: string; to: string } {
-  try {
-    return { from: 'en', to: 'pt-BR', ...JSON.parse(localStorage.getItem(LANGS_KEY) ?? '{}') };
-  } catch {
-    return { from: 'en', to: 'pt-BR' };
-  }
-}
-const from = ref(loadLangs().from);
-const to = ref(loadLangs().to);
-watch([from, to], () => {
-  try {
-    localStorage.setItem(LANGS_KEY, JSON.stringify({ from: from.value, to: to.value }));
-  } catch {
-    /* storage indisponível: só não lembra */
-  }
-});
+const { from, to } = useStoredLangs();
 
 const ACCEPT = 'image/png,image/jpeg,image/webp,image/tiff,application/pdf,.cbz,.zip,.epub';
 const dragging = ref(false);
