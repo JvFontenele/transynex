@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import type { Queue } from 'bullmq';
 import type { Project } from '@prisma/client';
 import type { AppContext } from './context.js';
@@ -30,11 +31,28 @@ export interface RunOptions {
   translateImages?: boolean;
 }
 
+// Limite de upload (multipart em main.ts) e de importação por URL.
+const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB ?? 500);
+export const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
+
+/** Upload em streaming: o conteúdo vai direto para o storage, sem passar pela memória. */
 export interface UploadedFile {
   filename: string;
   mimetype: string;
-  buffer: Buffer;
+  stream: Readable;
+  /** Multipart: o busboy corta o arquivo no limite em vez de dar erro. */
+  truncated?: () => boolean;
 }
+
+class UploadTooLargeError extends Error {}
+
+/**
+ * Rejeição antes de gravar: consome o resto do upload para a requisição
+ * terminar (sem isso o multipart fica travado esperando leitura).
+ */
+// ponytail: na importação por URL isso baixa o arquivo inteiro à toa; só
+// acontece com tipo não suportado, vindo de origem confiável (IMPORT_ORIGINS).
+export const discardUpload = (file: UploadedFile) => file.stream.on('error', () => {}).resume();
 
 type Result = { code: number; body: Record<string, unknown> };
 
@@ -60,9 +78,11 @@ export async function ingestFile(
 ): Promise<Result> {
   const isImage = IMAGE_MIMES.has(file.mimetype);
   if (!isSupportedMime(file.mimetype)) {
+    discardUpload(file);
     return { code: 415, body: { error: `Tipo não suportado: ${file.mimetype}` } };
   }
   if (file.mimetype === EPUB_MIME && project.kind !== 'DOCUMENT') {
+    discardUpload(file);
     return { code: 415, body: { error: 'EPUB só é aceito em projetos de documento' } };
   }
 
@@ -72,15 +92,35 @@ export async function ingestFile(
       fileName: file.filename,
       mimeType: file.mimetype,
       fileRef: '',
-      sizeBytes: file.buffer.length,
+      sizeBytes: 0,
       status: 'extracting',
     },
   });
 
   const ext = path.extname(file.filename) || '';
   const fileRef = `projects/${project.id}/source/${sourceFile.id}${ext}`;
-  await ctx.storage.save(fileRef, file.buffer);
-  await ctx.prisma.sourceFile.update({ where: { id: sourceFile.id }, data: { fileRef } });
+  // Conta e limita durante a cópia: content-length pode faltar ou mentir.
+  let sizeBytes = 0;
+  async function* limited() {
+    for await (const chunk of file.stream as AsyncIterable<Buffer>) {
+      sizeBytes += chunk.length;
+      if (sizeBytes > MAX_UPLOAD_BYTES) throw new UploadTooLargeError();
+      yield chunk;
+    }
+    if (file.truncated?.()) throw new UploadTooLargeError();
+  }
+  try {
+    await ctx.storage.save(fileRef, Readable.from(limited()));
+  } catch (err) {
+    // Upload abortado ou grande demais: não deixa arquivo parcial nem registro órfão.
+    await ctx.storage.delete(fileRef);
+    await ctx.prisma.sourceFile.delete({ where: { id: sourceFile.id } });
+    if (err instanceof UploadTooLargeError) {
+      return { code: 413, body: { error: `Arquivo maior que ${MAX_UPLOAD_MB} MB` } };
+    }
+    throw err;
+  }
+  await ctx.prisma.sourceFile.update({ where: { id: sourceFile.id }, data: { fileRef, sizeBytes } });
 
   const createPage = () =>
     ctx.prisma.page.count({ where: { projectId: project.id } }).then((order) =>

@@ -1,6 +1,9 @@
 // Self-check: pnpm --filter @transynex/backend exec tsx src/document.check.ts
 // (precisa do poppler-utils: pdftotext + pdftohtml)
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { extractPdfParagraphs } from './document.js';
 
 // PDF mínimo escrito à mão: parágrafo A, imagem 2x2, parágrafo B — e uma
@@ -25,10 +28,11 @@ const objects = [
   image,
   image,
 ];
-const pdf = Buffer.from(
+const pdf = path.join(await fs.mkdtemp(path.join(os.tmpdir(), 'document-check-')), 'input.pdf');
+await fs.writeFile(pdf, Buffer.from(
   `%PDF-1.4\n${objects.map((o, i) => `${i + 1} 0 obj\n${o}\nendobj\n`).join('')}trailer\n<< /Root 1 0 R /Size ${objects.length + 1} >>\n%%EOF\n`,
   'latin1',
-);
+));
 
 const saved: string[] = [];
 const pages = await extractPdfParagraphs(pdf, async ({ ext, pageNumber }) => {

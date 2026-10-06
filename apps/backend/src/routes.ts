@@ -1,5 +1,7 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
+import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 import sharp from 'sharp';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { Queue } from 'bullmq';
@@ -16,11 +18,13 @@ import { decryptSecrets, encryptSecrets } from './secrets.js';
 import type { QueueJobData } from './queue.js';
 import {
   defaultProviderFor as defaultProviderForCtx,
+  discardUpload,
   enqueueRun,
   EPUB_MIME,
   IMAGE_MIMES,
   ingestFile,
   isSupportedMime,
+  MAX_UPLOAD_BYTES,
   type RunOptions,
   type UploadedFile,
 } from './pipeline.js';
@@ -34,7 +38,6 @@ const IMPORT_ORIGINS = (process.env.IMPORT_ORIGINS ?? '')
   .split(',')
   .map((o) => o.trim().replace(/\/+$/, ''))
   .filter(Boolean);
-const MAX_IMPORT_BYTES = 100 * 1024 * 1024; // mesmo limite do multipart (main.ts)
 // Servidores de arquivo costumam mandar application/octet-stream: a extensão manda.
 const MIME_BY_EXT: Record<string, string> = {
   '.png': 'image/png',
@@ -60,7 +63,9 @@ async function readUpload(
     const mimetype = isSupportedMime(file.mimetype)
       ? file.mimetype
       : (MIME_BY_EXT[path.extname(file.filename).toLowerCase()] ?? file.mimetype);
-    return { file: { filename: file.filename, mimetype, buffer: await file.toBuffer() } };
+    return {
+      file: { filename: file.filename, mimetype, stream: file.file, truncated: () => file.file.truncated },
+    };
   }
   const { url, filename } = (req.body ?? {}) as { url?: string; filename?: string };
   if (!url) return { code: 400, error: 'Nenhum arquivo enviado' };
@@ -74,14 +79,15 @@ async function readUpload(
     return { code: 403, error: `Origem não liberada (IMPORT_ORIGINS): ${parsed.origin}` };
   }
   const res = await fetch(parsed).catch(() => null);
-  if (!res?.ok) return { code: 502, error: `Falha ao baixar o arquivo (${res ? `HTTP ${res.status}` : 'sem resposta'})` };
-  if (Number(res.headers.get('content-length')) > MAX_IMPORT_BYTES) {
-    return { code: 413, error: 'Arquivo maior que 100 MB' };
+  if (!res?.ok || !res.body) return { code: 502, error: `Falha ao baixar o arquivo (${res ? `HTTP ${res.status}` : 'sem resposta'})` };
+  if (Number(res.headers.get('content-length')) > MAX_UPLOAD_BYTES) {
+    await res.body.cancel();
+    return { code: 413, error: `Arquivo maior que ${MAX_UPLOAD_BYTES / 1024 / 1024} MB` };
   }
   const name = filename || decodeURIComponent(parsed.pathname.split('/').pop() || 'arquivo');
   const mimetype =
     MIME_BY_EXT[path.extname(name).toLowerCase()] ?? res.headers.get('content-type')?.split(';')[0] ?? '';
-  return { file: { filename: name, mimetype, buffer: Buffer.from(await res.arrayBuffer()) } };
+  return { file: { filename: name, mimetype, stream: Readable.fromWeb(res.body as WebReadableStream) } };
 }
 
 export function registerRoutes(
@@ -198,6 +204,7 @@ export function registerRoutes(
     if ('error' in upload) return reply.code(upload.code).send({ error: upload.error });
     const { file } = upload;
     if (!isSupportedMime(file.mimetype)) {
+      discardUpload(file);
       return reply.code(415).send({ error: `Tipo não suportado: ${file.mimetype}` });
     }
     // PDF/EPUB tendem a ser documento (texto corrido); imagens e CBZ/ZIP, HQ.

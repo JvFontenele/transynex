@@ -43,13 +43,12 @@ const MIN_LETTERS_PER_PAGE = 40;
  * altura em que aparecem na página.
  */
 export async function extractPdfParagraphs(
-  buffer: Buffer,
+  pdfPath: string,
   saveImage?: SaveImage,
 ): Promise<DocumentPage[] | null> {
+  // Diretório só para as imagens que o pdftohtml grava.
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'transynex-doc-'));
   try {
-    const pdfPath = path.join(dir, 'input.pdf');
-    await fs.writeFile(pdfPath, buffer);
     // Lido em streaming: o XHTML do -bbox-layout tem uma tag por linha e, num
     // livro grande, passa de centenas de MB — nunca vira uma string só.
     const pages = await parseBboxLayout(spawnLines('pdftotext', ['-bbox-layout', pdfPath, '-']));

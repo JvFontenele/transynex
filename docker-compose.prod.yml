@@ -50,6 +50,8 @@ services:
       PADDLE_OCR_URL: http://paddle-ocr:8866
       # Origens de onde o backend pode baixar arquivos (ex: Cloudreve), separadas por vírgula
       IMPORT_ORIGINS: ${IMPORT_ORIGINS:-}
+      # Tamanho máximo de upload/importação, em MB
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-500}
       TRANSYNEX_STORAGE_DIR: /data/storage
       TRANSYNEX_MODELS_DIR: /data/models/tesseract
       JWT_SECRET: ${JWT_SECRET:?defina JWT_SECRET no .env.prod}

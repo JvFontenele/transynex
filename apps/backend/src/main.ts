@@ -5,6 +5,7 @@ import { Server as SocketServer } from 'socket.io';
 import { registerAuth } from './auth.js';
 import { createContext } from './context.js';
 import { createQueue, createWorker } from './queue.js';
+import { MAX_UPLOAD_BYTES } from './pipeline.js';
 import { registerRoutes } from './routes.js';
 import { registerUserRoutes } from './users.js';
 
@@ -13,7 +14,7 @@ const PORT = Number(process.env.PORT ?? 3000);
 const ctx = await createContext();
 // maxParamLength: o token JWT de /files/:token excede os 100 chars default.
 const app = Fastify({ logger: true, maxParamLength: 1000 });
-await app.register(multipart, { limits: { fileSize: 100 * 1024 * 1024 } });
+await app.register(multipart, { limits: { fileSize: MAX_UPLOAD_BYTES } });
 // CORS para clientes externos (extensão de navegador, ferramentas). A UI web é
 // same-origin e não depende disso. Extensões sempre liberadas; demais origens
 // via CORS_ORIGINS (lista separada por vírgula). Sem cookies: auth por Bearer.

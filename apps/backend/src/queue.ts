@@ -1,4 +1,8 @@
+import { createWriteStream } from 'node:fs';
+import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { randomUUID } from 'node:crypto';
 import { Queue, Worker, type Job as BullJob } from 'bullmq';
 import type { Server as SocketServer } from 'socket.io';
@@ -270,14 +274,27 @@ export function createWorker(
     await complete(jobId, data.projectId, { pageId, regions: allRegions.length });
   };
 
+  // Os extratores (poppler, adm-zip) trabalham sobre um caminho: o arquivo do
+  // storage é copiado em streaming para o tmp, sem passar pela memória.
+  const withLocalCopy = async <T>(ref: string, fn: (filePath: string) => Promise<T>): Promise<T> => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'transynex-src-'));
+    try {
+      const filePath = path.join(dir, `input${path.extname(ref)}`);
+      await pipeline(await ctx.storage.readStream(ref), createWriteStream(filePath));
+      return await fn(filePath);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  };
+
   // Salva cada página assim que é extraída (o arquivo nunca fica inteiro na memória).
   const extractToPages = async (
     sourceFile: { id: string; projectId: string; mimeType: string },
-    buffer: Buffer,
+    filePath: string,
   ): Promise<number> => {
     const { id: sourceFileId, projectId } = sourceFile;
     const baseOrder = await ctx.prisma.page.count({ where: { projectId } });
-    return extractPages(buffer, sourceFile.mimeType, async (page, i) => {
+    return extractPages(filePath, sourceFile.mimeType, async (page, i) => {
       const pageRef = `projects/${projectId}/pages/${sourceFileId}-${i}${page.ext}`;
       await ctx.storage.save(pageRef, page.buffer);
       await ctx.prisma.page.create({
@@ -293,9 +310,8 @@ export function createWorker(
     const sourceFile = await ctx.prisma.sourceFile.findUniqueOrThrow({
       where: { id: sourceFileId },
     });
-    const pageCount = await extractToPages(
-      sourceFile,
-      await ctx.storage.read(sourceFile.fileRef),
+    const pageCount = await withLocalCopy(sourceFile.fileRef, (filePath) =>
+      extractToPages(sourceFile, filePath),
     );
     await ctx.prisma.sourceFile.update({
       where: { id: sourceFileId },
@@ -316,7 +332,7 @@ export function createWorker(
   const ocrDocumentPages = async (
     data: ExtractDocJobData,
     sourceFile: { id: string; projectId: string; mimeType: string },
-    buffer: Buffer,
+    filePath: string,
   ): Promise<DocumentPage[]> => {
     let pages = await ctx.prisma.page.findMany({
       where: { sourceFileId: sourceFile.id },
@@ -324,7 +340,7 @@ export function createWorker(
     });
 
     if (pages.length === 0) {
-      await extractToPages(sourceFile, buffer);
+      await extractToPages(sourceFile, filePath);
       pages = await ctx.prisma.page.findMany({
         where: { sourceFileId: sourceFile.id },
         orderBy: { order: 'asc' },
@@ -373,18 +389,18 @@ export function createWorker(
       return ref;
     };
 
-    const buffer = await ctx.storage.read(sourceFile.fileRef);
     let origin = sourceFile.mimeType === EPUB_MIME ? 'epub' : 'text-layer';
-    let pages =
-      sourceFile.mimeType === EPUB_MIME
-        ? extractEpubParagraphs(buffer)
-        : sourceFile.mimeType === 'application/pdf'
-          ? await extractPdfParagraphs(buffer, saveImage)
-          : null;
-    if (!pages) {
+    const pages = await withLocalCopy(sourceFile.fileRef, async (filePath) => {
+      const extracted =
+        sourceFile.mimeType === EPUB_MIME
+          ? extractEpubParagraphs(await fs.readFile(filePath))
+          : sourceFile.mimeType === 'application/pdf'
+            ? await extractPdfParagraphs(filePath, saveImage)
+            : null;
+      if (extracted) return extracted;
       origin = 'ocr';
-      pages = await ocrDocumentPages(data, sourceFile, buffer);
-    }
+      return ocrDocumentPages(data, sourceFile, filePath);
+    });
     await setProgress(jobId, 90);
 
     const baseOrder = await ctx.prisma.documentBlock.count({ where: { projectId } });

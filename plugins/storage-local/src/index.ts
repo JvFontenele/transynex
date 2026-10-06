@@ -1,6 +1,7 @@
-import { createReadStream } from 'node:fs';
+import { createReadStream, createWriteStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { pathToFileURL } from 'node:url';
 import type {
   HealthCheckResult,
@@ -56,12 +57,7 @@ export class LocalStorageProvider implements StorageProvider {
     if (Buffer.isBuffer(data)) {
       await fs.writeFile(abs, data);
     } else {
-      const { writeFile } = await import('node:fs/promises');
-      const chunks: Buffer[] = [];
-      for await (const chunk of data) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      }
-      await writeFile(abs, Buffer.concat(chunks));
+      await pipeline(data, createWriteStream(abs));
     }
     return ref;
   }

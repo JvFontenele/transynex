@@ -18,28 +18,26 @@ export interface ExtractedPage {
 // Entrega uma página por vez ao `onPage`: um PDF/CBZ de centenas de páginas
 // nunca fica inteiro na memória. Retorna a quantidade de páginas.
 export async function extractPages(
-  buffer: Buffer,
+  filePath: string,
   mimeType: string,
   onPage: (page: ExtractedPage, index: number) => Promise<void>,
 ): Promise<number> {
-  if (mimeType === 'application/pdf') return extractPdf(buffer, onPage);
+  if (mimeType === 'application/pdf') return extractPdf(filePath, onPage);
   if (
     mimeType === 'application/zip' ||
     mimeType === 'application/x-cbz' ||
     mimeType === 'application/vnd.comicbook+zip'
   ) {
-    return extractZip(buffer, onPage);
+    return extractZip(filePath, onPage);
   }
   throw new Error(`Extração não suportada para ${mimeType}`);
 }
 
 type OnPage = (page: ExtractedPage, index: number) => Promise<void>;
 
-async function extractPdf(buffer: Buffer, onPage: OnPage): Promise<number> {
+async function extractPdf(pdfPath: string, onPage: OnPage): Promise<number> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'transynex-pdf-'));
   try {
-    const pdfPath = path.join(dir, 'input.pdf');
-    await fs.writeFile(pdfPath, buffer);
     // pdftoppm escreve em disco; aqui só uma página por vez é lida para a memória.
     await execFileAsync('pdftoppm', ['-png', '-r', '150', pdfPath, path.join(dir, 'page')]);
     const files = (await fs.readdir(dir)).filter((f) => f.endsWith('.png')).sort(naturalCompare);
@@ -53,8 +51,9 @@ async function extractPdf(buffer: Buffer, onPage: OnPage): Promise<number> {
   }
 }
 
-async function extractZip(buffer: Buffer, onPage: OnPage): Promise<number> {
-  const zip = new AdmZip(buffer);
+// ponytail: adm-zip carrega o ZIP inteiro na memória; trocar por yauzl se CBZ gigante virar caso real.
+async function extractZip(zipPath: string, onPage: OnPage): Promise<number> {
+  const zip = new AdmZip(zipPath);
   const entries = zip
     .getEntries()
     .filter((e) => !e.isDirectory && IMAGE_EXTS.has(path.extname(e.entryName).toLowerCase()))
