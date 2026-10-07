@@ -2,7 +2,8 @@
 #   Compose file: /docker-compose.coolify.yml
 #   Domínio: definir no serviço "frontend" (porta 80) pelo painel do Coolify.
 # Diferenças para o docker-compose.prod.yml:
-#   - sem "ports": quem publica o frontend é o proxy do Coolify (Traefik);
+#   - o domínio público é publicado pelo proxy do Coolify (Traefik); a porta
+#     TRANSYNEX_LAN_PORT (8080) fica só para acesso interno (LAN/VPN);
 #   - segredos gerados pelo Coolify (SERVICE_PASSWORD_*), editáveis no painel.
 services:
   postgres:
@@ -82,6 +83,10 @@ services:
     restart: unless-stopped
     expose:
       - '80'
+    # Acesso pela LAN/VPN sem passar pelo Cloudflare: http://IP-DO-SERVIDOR:8080.
+    # Escuta em todas as interfaces: não encaminhar essa porta no roteador.
+    ports:
+      - '${TRANSYNEX_LAN_PORT:-8080}:80'
     depends_on:
       - backend
 
